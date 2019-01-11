@@ -1,7 +1,8 @@
 
 local dynarray = require'dynarray'
 setfenv(1, require'low'.C)
---setfenv(dynarray, getfenv())
+setfenv(dynarray.fromterra, getfenv())
+setfenv(dynarray.fromlua, getfenv())
 
 local C = cached(C)
 
