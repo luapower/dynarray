@@ -17,6 +17,8 @@ local function dynarray_type(T, size_t, growth_factor, C)
 		len: size_t;
 	}
 
+	local props = addproperties(arr)
+
 	--storage
 
 	function arr.metamethods.__cast(from, to, exp)
@@ -171,6 +173,12 @@ local function dynarray_type(T, size_t, growth_factor, C)
 		return true
 	end
 
+	terra arr:copy()
+		var a: arr = {}
+		a:update(0, self)
+		return a
+	end
+
 	terra arr:append(a: &arr)
 		return self:update(self.len, a)
 	end
@@ -194,7 +202,6 @@ local function dynarray_type(T, size_t, growth_factor, C)
 
 	arr.methods.sort:adddefinition(
 		terra(self: &arr, cmp: {&T, &T} -> int32)
-			if cmp == nil then cmp = cmp_normal end
 			qsort(self.data, self.len, sizeof(T), [{&opaque, &opaque} -> int32](cmp))
 			return self
 		end
@@ -222,10 +229,10 @@ local function dynarray_type(T, size_t, growth_factor, C)
 	end
 
 	--binary search for an insert position that keeps the array sorted.
-	local cmp_lt  = terra(a: &T, b: &T) return @a <  @b end
-	local cmp_lte = terra(a: &T, b: &T) return @a <= @b end
-	local cmp_gt  = terra(a: &T, b: &T) return @a >  @b end
-	local cmp_gte = terra(a: &T, b: &T) return @a >= @b end
+	props.lt  = terra(a: &T, b: &T) return @a <  @b end
+	props.lte = terra(a: &T, b: &T) return @a <= @b end
+	props.gt  = terra(a: &T, b: &T) return @a >  @b end
+	props.gte = terra(a: &T, b: &T) return @a >= @b end
 
 	arr.methods.binsearch = terralib.overloadedfunction('binsearch', {})
 
@@ -251,18 +258,7 @@ local function dynarray_type(T, size_t, growth_factor, C)
 		end
 	)
 
-	arr.methods.binsearch:adddefinition(
-		terra(self: &arr, v: T): size_t
-			return self:binsearch(v, cmp_lt)
-		end
-	)
-
-	terra arr:binsearch_reverse(v: T): size_t
-		return self:binsearch(v, cmp_lt)
-	end
-
 	local cmp_lt = macro(function(t, i, v) return `t[i] < v end)
-
 	arr.methods.binsearch_macro = macro(function(self, v, cmp)
 		cmp = cmp or cmp_lt
 		return `binsearch(v, self.data, 0, self.len-1, cmp)

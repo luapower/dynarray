@@ -27,7 +27,7 @@ local terra test_dynarray()
 	for i,v in arr do
 		pr(i, v)
 	end
-	pr('binsearch -5000: ', arr:binsearch(-5000))
+	pr('binsearch -5000: ', arr:binsearch(-5000, arr.lt))
 	pr('binsearch_macro -5000: ', arr:binsearch_macro(-5000))
 	arr:free()
 end
