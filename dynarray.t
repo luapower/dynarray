@@ -105,9 +105,8 @@ local function dynarray_type(T, size_t, growth_factor, C)
 
 	--stack interface
 
-	terra arr:push(val: T)
-		return self:set(self.len, val)
-	end
+	terra arr:push(val: T) return self:set(self.len, val) end
+	terra arr:add (val: T) return self:set(self.len, val) end
 
 	terra arr:pop()
 		var v = self:get(-1)
@@ -117,19 +116,15 @@ local function dynarray_type(T, size_t, growth_factor, C)
 
 	--segment shifting
 
-	arr.methods.insert = terralib.overloadedfunction('insert', {})
-
-	arr.methods.insert:adddefinition(
-		terra(self: &arr, i: size_t, n: size_t)
-			if i < 0 then i = self.len - i end
-			check(i >= 0 and n >= 0)
-			var b = max(0, self.len-i) --how many bytes must be moved
-			if not self:realloc(max(self.size, i+n+b)) then return false end
-			if b <= 0 then return true end
-			memmove(self.data+i+n, self.data+i, b)
-			return true
-		end
-	)
+	terra arr:insert_junk(i: size_t, n: size_t)
+		if i < 0 then i = self.len - i end
+		check(i >= 0 and n >= 0)
+		var b = max(0, self.len-i) --how many bytes must be moved
+		if not self:realloc(max(self.size, i+n+b)) then return false end
+		if b <= 0 then return true end
+		memmove(self.data+i+n, self.data+i, b)
+		return true
+	end
 
 	terra arr:remove(i: size_t, n: size_t)
 		if i < 0 then i = self.len - i end
@@ -173,19 +168,27 @@ local function dynarray_type(T, size_t, growth_factor, C)
 		return true
 	end
 
+	terra arr:append(a: &arr)
+		return self:update(self.len, a)
+	end
+
 	terra arr:copy()
 		var a: arr = {}
 		a:update(0, self)
 		return a
 	end
 
-	terra arr:append(a: &arr)
-		return self:update(self.len, a)
-	end
+	arr.methods.insert = terralib.overloadedfunction('insert', {})
+
+	arr.methods.insert:adddefinition(
+		terra(self: &arr, i: size_t, val: T)
+			return self:insert_junk(i, 1) and self:set(i, val)
+		end
+	)
 
 	arr.methods.insert:adddefinition(
 		terra(self: &arr, i: size_t, a: &arr)
-			return self:insert(i, a.len) and self:update(i, a)
+			return self:insert_junk(i, a.len) and self:update(i, a)
 		end
 	)
 
