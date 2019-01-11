@@ -28,6 +28,7 @@ local terra test_dynarray()
 		pr(i, v)
 	end
 	pr('binsearch -5000: ', arr:binsearch(-5000))
+	pr('binsearch_macro -5000: ', arr:binsearch_macro(-5000))
 	arr:free()
 end
 for i,v in ipairs(C.__deps) do print(v) end

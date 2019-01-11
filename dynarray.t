@@ -261,8 +261,11 @@ local function dynarray_type(T, size_t, growth_factor, C)
 		return self:binsearch(v, cmp_lt)
 	end
 
+	local cmp_lt = macro(function(t, i, v) return `t[i] < v end)
+
 	arr.methods.binsearch_macro = macro(function(self, v, cmp)
-		return binsearch(v, self, 0, self.len-1, cmp)
+		cmp = cmp or cmp_lt
+		return `binsearch(v, self.data, 0, self.len-1, cmp)
 	end)
 
 	return arr
