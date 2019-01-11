@@ -1,5 +1,5 @@
 
---Dynamic arrays for Terra.
+--Dynamic array type for Terra.
 --Written by Cosmin Apreutesei. Public domain.
 
 --stdlib deps: realloc, memset, memmove, qsort.
@@ -122,16 +122,18 @@ local function dynarray_type(T, size_t, growth_factor, C)
 		var b = max(0, self.len-i) --how many bytes must be moved
 		if not self:realloc(max(self.size, i+n+b)) then return false end
 		if b <= 0 then return true end
-		memmove(self.data+i+n, self.data+i, b)
+		memmove(self.data+i+n, self.data+i, sizeof(T) * b)
 		return true
 	end
 
 	terra arr:remove(i: size_t, n: size_t)
 		if i < 0 then i = self.len - i end
 		check(i >= 0 and n >= 0)
-		if n >= self.len-i-1 then return end
-		memmove(self.data+i, self.data+i+n, self.len-i-n)
-		self.len = self.len - n
+		var b = self.len-i-n --how many elements must be moved
+		if b > 0 then
+			memmove(self.data+i, self.data+i+n, sizeof(T) * b)
+		end
+		self.len = self.len - min(n, self.len-i)
 	end
 
 	--view interface
@@ -164,7 +166,7 @@ local function dynarray_type(T, size_t, growth_factor, C)
 			end
 			self.len = newlen
 		end
-		memmove(self.data+i, a.data, a.len)
+		memmove(self.data+i, a.data, sizeof(T) * a.len)
 		return true
 	end
 
