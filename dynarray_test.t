@@ -27,6 +27,7 @@ local terra test_dynarray()
 	for i,v in arr do
 		pr(i, v)
 	end
+	pr('binsearch -5000: ', arr:binsearch(-5000))
 	arr:free()
 end
 for i,v in ipairs(C.__deps) do print(v) end

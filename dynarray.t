@@ -222,27 +222,27 @@ local function dynarray_type(T, size_t, growth_factor, C)
 	end
 
 	--binary search for an insert position that keeps the array sorted.
-	local cmp_lt  = terra(a: &T, b: &T) return a <  b end
-	local cmp_lte = terra(a: &T, b: &T) return a <= b end
-	local cmp_gt  = terra(a: &T, b: &T) return a >  b end
-	local cmp_gte = terra(a: &T, b: &T) return a >= b end
+	local cmp_lt  = terra(a: &T, b: &T) return @a <  @b end
+	local cmp_lte = terra(a: &T, b: &T) return @a <= @b end
+	local cmp_gt  = terra(a: &T, b: &T) return @a >  @b end
+	local cmp_gte = terra(a: &T, b: &T) return @a >= @b end
 
 	arr.methods.binsearch = terralib.overloadedfunction('binsearch', {})
 
 	arr.methods.binsearch:adddefinition(
-		terra(self: &arr, v: &T, cmp: {&T, &T} -> bool): size_t
+		terra(self: &arr, v: T, cmp: {&T, &T} -> bool): size_t
 			var lo = [size_t](0)
 			var hi = self.len-1
 			var i = hi + 1
 			while true do
 				if lo < hi then
 					var mid: int = lo + (hi - lo) / 2
-					if cmp(&self.data[mid], v) then
+					if cmp(&self.data[mid], &v) then
 						lo = mid + 1
 					else
 						hi = mid
 					end
-				elseif lo == hi and not cmp(&self.data[lo], v) then
+				elseif lo == hi and not cmp(&self.data[lo], &v) then
 					return lo
 				else
 					return i
@@ -252,16 +252,14 @@ local function dynarray_type(T, size_t, growth_factor, C)
 	)
 
 	arr.methods.binsearch:adddefinition(
-		terra(self: &arr, v: &T): size_t
+		terra(self: &arr, v: T): size_t
 			return self:binsearch(v, cmp_lt)
 		end
 	)
 
-	arr.methods.binsearch:adddefinition(
-		terra(self: &arr, v: &T): size_t
-			return self:binsearch(v, cmp_lt)
-		end
-	)
+	terra arr:binsearch_reverse(v: T): size_t
+		return self:binsearch(v, cmp_lt)
+	end
 
 	arr.methods.binsearch_macro = macro(function(self, v, cmp)
 		return binsearch(v, self, 0, self.len-1, cmp)
