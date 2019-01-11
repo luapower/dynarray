@@ -2,6 +2,9 @@
 --Dynamic arrays for Terra.
 --Written by Cosmin Apreutesei. Public domain.
 
+--stdlib deps: realloc, memset, memmove, qsort.
+--macro deps: iif, min, max, check.
+
 if not ... then require'dynarray_test'; return end
 
 local function dynarray_type(T, size_t, growth_factor, C)
@@ -112,10 +115,9 @@ local function dynarray_type(T, size_t, growth_factor, C)
 
 	--segment shifting
 
-	local insert = terralib.overloadedfunction('insert', {})
-	arr.methods.insert = insert
+	arr.methods.insert = terralib.overloadedfunction('insert', {})
 
-	insert:adddefinition(
+	arr.methods.insert:adddefinition(
 		terra(self: &arr, i: size_t, n: size_t)
 			if i < 0 then i = self.len - i end
 			check(i >= 0 and n >= 0)
@@ -124,7 +126,8 @@ local function dynarray_type(T, size_t, growth_factor, C)
 			if b <= 0 then return true end
 			memmove(self.data+i+n, self.data+i, b)
 			return true
-		end)
+		end
+	)
 
 	terra arr:remove(i: size_t, n: size_t)
 		if i < 0 then i = self.len - i end
@@ -172,12 +175,42 @@ local function dynarray_type(T, size_t, growth_factor, C)
 		return self:update(self.len, a)
 	end
 
-	insert:adddefinition(
+	arr.methods.insert:adddefinition(
 		terra(self: &arr, i: size_t, a: &arr)
 			return self:insert(i, a.len) and self:update(i, a)
-		end)
+		end
+	)
 
-	--sorting and searching
+	--sorting
+
+	local cmp_normal = terra(a: &int, b: &int): int32
+		return iif(@a < @b, -1, iif(@a > @b, 1, 0))
+	end
+	local cmp_reverse = terra(a: &int, b: &int): int32
+		return iif(@a < @b, -1, iif(@a > @b, 1, 0))
+	end
+
+	arr.methods.sort = terralib.overloadedfunction('sort', {})
+
+	arr.methods.sort:adddefinition(
+		terra(self: &arr, cmp: {&T, &T} -> int32)
+			if cmp == nil then cmp = cmp_normal end
+			qsort(self.data, self.len, sizeof(T), [{&opaque, &opaque} -> int32](cmp))
+			return self
+		end
+	)
+
+	arr.methods.sort:adddefinition(
+		terra(self: &arr)
+			return self:sort(cmp_normal)
+		end
+	)
+
+	terra arr:sort_reverse()
+		return self:sort(cmp_reverse)
+	end
+
+	--searching
 
 	terra arr:find(val: T)
 		for i,v in self do
@@ -188,13 +221,51 @@ local function dynarray_type(T, size_t, growth_factor, C)
 		return false
 	end
 
-	terra arr:sort(equal)
-		--
-	end
+	--binary search for an insert position that keeps the array sorted.
+	local cmp_lt  = terra(a: &T, b: &T) return a <  b end
+	local cmp_lte = terra(a: &T, b: &T) return a <= b end
+	local cmp_gt  = terra(a: &T, b: &T) return a >  b end
+	local cmp_gte = terra(a: &T, b: &T) return a >= b end
 
-	terra:binsearch(val: T)
-		--TODO
-	end
+	arr.methods.binsearch = terralib.overloadedfunction('binsearch', {})
+
+	arr.methods.binsearch:adddefinition(
+		terra(self: &arr, v: &T, cmp: {&T, &T} -> bool): size_t
+			var lo = [size_t](0)
+			var hi = self.len-1
+			var i = hi + 1
+			while true do
+				if lo < hi then
+					var mid: int = lo + (hi - lo) / 2
+					if cmp(&self.data[mid], v) then
+						lo = mid + 1
+					else
+						hi = mid
+					end
+				elseif lo == hi and not cmp(&self.data[lo], v) then
+					return lo
+				else
+					return i
+				end
+			end
+		end
+	)
+
+	arr.methods.binsearch:adddefinition(
+		terra(self: &arr, v: &T): size_t
+			return self:binsearch(v, cmp_lt)
+		end
+	)
+
+	arr.methods.binsearch:adddefinition(
+		terra(self: &arr, v: &T): size_t
+			return self:binsearch(v, cmp_lt)
+		end
+	)
+
+	arr.methods.binsearch_macro = macro(function(self, v, cmp)
+		return binsearch(v, self, 0, self.len-1, cmp)
+	end)
 
 	return arr
 end
