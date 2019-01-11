@@ -1,7 +1,7 @@
 
 local dynarray = require'dynarray'
 setfenv(1, require'low'.C)
-setfenv(dynarray, getfenv())
+--setfenv(dynarray, getfenv())
 
 local C = cached(C)
 
