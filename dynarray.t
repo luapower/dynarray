@@ -3,7 +3,7 @@
 --Written by Cosmin Apreutesei. Public domain.
 
 --stdlib deps: realloc, memset, memmove, qsort.
---macro deps: iif, min, max, check.
+--macro deps: iif, min, max, check, binsearch, addproperties.
 
 if not ... then require'dynarray_test'; return end
 
@@ -27,11 +27,11 @@ local function dynarray_type(T, size_t, growth_factor, C)
 		end
 	end
 
-	arr.methods.isslice = macro(function(self) return `self.size < 0 end)
+	arr.methods.isview = macro(function(self) return `self.size < 0 end)
 
 	terra arr:realloc(size: size_t): bool
 		check(size >= 0)
-		if self:isslice() then
+		if self:isview() then
 			return size <= self.len
 		end
 		if size == self.size then return true end
@@ -87,7 +87,7 @@ local function dynarray_type(T, size_t, growth_factor, C)
 
 	terra arr:set(i: size_t, val: T): bool
 		if i < 0 then i = self.len - i end
-		if self:isslice() then check(i < self.len) end
+		if self:isview() then check(i < self.len) end
 		if not self:grow(i) then return false end
 		self.data[i] = val
 		return true
@@ -139,7 +139,7 @@ local function dynarray_type(T, size_t, growth_factor, C)
 		self.len = self.len - n
 	end
 
-	--slice interface
+	--view interface
 
 	--NOTE: j is not the last position, but one position after that!
 	terra arr:range(i: size_t, j: size_t, truncate: bool)
@@ -151,7 +151,7 @@ local function dynarray_type(T, size_t, growth_factor, C)
 		return i, j-i
 	end
 
-	terra arr:slice(i: size_t, j: size_t) --NOTE: aliasing!
+	terra arr:view(i: size_t, j: size_t) --NOTE: aliasing!
 		var start, len = self:range(i, j, true)
 		return arr {self.data+i, -i, len}
 	end
@@ -222,13 +222,12 @@ local function dynarray_type(T, size_t, growth_factor, C)
 	terra arr:find(val: T)
 		for i,v in self do
 			if v == val then
-				return true
+				return i
 			end
 		end
-		return false
+		return -1
 	end
 
-	--binary search for an insert position that keeps the array sorted.
 	props.lt  = terra(a: &T, b: &T) return @a <  @b end
 	props.lte = terra(a: &T, b: &T) return @a <= @b end
 	props.gt  = terra(a: &T, b: &T) return @a >  @b end
@@ -236,6 +235,7 @@ local function dynarray_type(T, size_t, growth_factor, C)
 
 	arr.methods.binsearch = terralib.overloadedfunction('binsearch', {})
 
+	--binary search for an insert position that keeps the array sorted.
 	arr.methods.binsearch:adddefinition(
 		terra(self: &arr, v: T, cmp: {&T, &T} -> bool): size_t
 			var lo = [size_t](0)
