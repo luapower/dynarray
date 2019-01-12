@@ -7,7 +7,8 @@
 
 --[[ API
 
-a = dynarray(T=int32, [size_t=int32], [grow_factor=2], [C=require'low'.C])
+a = dynarray(T=int32, size_t=int32, grow_factor=2)
+a: dynarray(T=int32, size_t=int32, grow_factor=2, C=require'low'.C) = {}
 a.len
 a:isview() -> ?
 a:free()
@@ -58,7 +59,7 @@ local function dynarray_type(T, size_t, growth_factor, C)
 
 	function arr.metamethods.__cast(from, to, exp)
 		if from == (`{}):gettype() then --initalize with empty tuple
-			return `arr {nil, 0, 0}
+			return `arr {data = nil, size = 0, len = 0}
 		end
 	end
 
@@ -189,7 +190,7 @@ local function dynarray_type(T, size_t, growth_factor, C)
 
 	terra arr:view(i: size_t, j: size_t) --NOTE: aliasing!
 		var start, len = self:range(i, j, true)
-		return arr {self.data+i, -i, len}
+		return arr {data = self.data+i, size = -i, len = len}
 	end
 
 	--array-to-array interface
