@@ -5,6 +5,41 @@
 --stdlib deps: realloc, memset, memmove, qsort.
 --macro deps: iif, min, max, check, binsearch, addproperties.
 
+--[[ API
+
+a = dynarray(T=int32, [size_t=int32], [grow_factor=2], [C=require'low'.C])
+a.len
+a:isview() -> ?
+a:free()
+a:shrink()
+a(i) -> &v
+a:get(i) -> T
+a:set(i, v) -> ok?
+for i,v in a do ... end
+a:push(v) -> ok?
+a:add(v) -> ok?
+a:pop() -> v
+a:insert_junk(i, n) -> ok?
+a:remove(i, n)
+a:clear()
+a:range(i, j, truncate?) -> start, len
+a:view(i, j) -> a
+a:update(i, &a) -> ok?
+a:extend(&a) -> ok?
+a:copy() -> a
+a:insert(i, v)
+a:insert(i, &a)
+a:sort(cmp: {&T, &T} -> int32)
+a:sort()
+a:sort_reverse()
+a:find(v) -> i
+a:count(v) -> n
+a:binsearch(v, cmp: {&T, &T} -> bool) -> i
+a:binsearch(v, a.lt|a.lte|a.gt|a.gte) -> i
+a:binsearch_macro(v, cmp(t, i, v) -> bool) -> i
+a:reverse()
+]]
+
 if not ... then require'dynarray_test'; return end
 
 local function dynarray_type(T, size_t, growth_factor, C)
@@ -55,7 +90,7 @@ local function dynarray_type(T, size_t, growth_factor, C)
 		return self:realloc(self.len)
 	end
 
-	--random access
+	--random access with auto-growing
 
 	arr.metamethods.__apply = terra(self: &arr, i: size_t): &T
 		if i < 0 then i = self.len - i end
@@ -136,6 +171,10 @@ local function dynarray_type(T, size_t, growth_factor, C)
 		self.len = self.len - min(n, self.len-i)
 	end
 
+	terra arr:clear()
+		self.len = 0
+	end
+
 	--view interface
 
 	--NOTE: j is not the last position, but one position after that!
@@ -170,7 +209,7 @@ local function dynarray_type(T, size_t, growth_factor, C)
 		return true
 	end
 
-	terra arr:append(a: &arr)
+	terra arr:extend(a: &arr)
 		return self:update(self.len, a)
 	end
 
@@ -233,6 +272,16 @@ local function dynarray_type(T, size_t, growth_factor, C)
 		return -1
 	end
 
+	terra arr:count(val: T)
+		var n: size_t = 0
+		for i,v in self do
+			if v == val then
+				n = n + 1
+			end
+		end
+		return n
+	end
+
 	props.lt  = terra(a: &T, b: &T) return @a <  @b end
 	props.lte = terra(a: &T, b: &T) return @a <= @b end
 	props.gt  = terra(a: &T, b: &T) return @a >  @b end
@@ -268,6 +317,18 @@ local function dynarray_type(T, size_t, growth_factor, C)
 		cmp = cmp or cmp_lt
 		return `binsearch(v, self.data, 0, self.len-1, cmp)
 	end)
+
+	--reversing
+
+	terra arr:reverse()
+		var j = self.len-1
+		for k = 0, (j+1)/2 do
+			var tmp = self.data[k]
+			self.data[k] = self.data[j-k]
+			self.data[j-k] = tmp
+		end
+		return self
+	end
 
 	return arr
 end
