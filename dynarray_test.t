@@ -17,7 +17,7 @@ local terra test_dynarray()
 	arr:set(15, 1234)
 	pr(arr.size, arr.len, arr:get(15))
 	arr:set(19, 4321)
-	check(arr:get(19) == 4321)
+	check(@arr:get(19) == 4321)
 	var x = -1
 	for i,_ in arr do
 		arr:set(i, x)

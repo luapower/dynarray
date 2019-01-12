@@ -14,9 +14,9 @@ a:isview() -> ?
 a:free()
 a:shrink()
 a(i) -> &v
-a:get(i) -> T
+a:get(i) -> &v
 a:set(i, v) -> ok?
-for i,v in a do ... end
+for i, &v in a do ... end
 a:push(v) -> ok?
 a:add(v) -> ok?
 a:pop() -> v
@@ -99,7 +99,7 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 		self:realloc(0)
 	end
 
-	terra arr:shrink()
+	terra arr:shrink(): bool
 		if self.size == self.len then return true end
 		return self:realloc(self.len)
 	end
@@ -112,10 +112,10 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 		return &self.data[i]
 	end
 
-	terra arr:get(i: size_t): T
+	terra arr:get(i: size_t): &T
 		if i < 0 then i = self.len - i end
 		check(i >= 0 and i < self.len)
-		return self.data[i]
+		return &self.data[i]
 	end
 
 	terra arr:grow(i: size_t): bool
@@ -413,7 +413,7 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 
 	--string interface
 
-	if T == uint8 then
+	if T == int8 then
 
 		--TODO
 
