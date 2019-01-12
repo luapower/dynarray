@@ -36,15 +36,15 @@ for i,v in ipairs(C.__deps) do print(v) end
 test_dynarray()
 
 
-local str_t = dynarray(int8)
+local S = dynarray(int8)
 local terra test_arrayofstrings()
-	var arr = dynarray(str_t)
-	var s = str_t'Hello'
-	pr(s.len)
-	arr:add(s)
-	pr(arr.len)
+	var arr = dynarray(S)
+	arr:add(S'Hello')
+	arr:add(S'World!')
+	pr(arr.len, @arr(0), @arr(1))
 	arr:call'free'
-	pr(arr.size, arr.len, arr(0).size, arr(0).len)
+	pr(arr(0).size, arr(0).len)
 	arr:free()
+	pr(arr.size, arr.len)
 end
 test_arrayofstrings()
