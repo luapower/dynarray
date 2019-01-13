@@ -10,7 +10,6 @@
 a = dynarray(T=int32, size_t=int32, grow_factor=2)
 a: dynarray(T=int32, size_t=int32, grow_factor=2, C=require'low'.C) = {}
 a.len
-a:isview() -> ?
 a:free()
 a:shrink()
 a(i) -> &v
@@ -48,55 +47,66 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 
 	setfenv(1, C)
 
-	local arr = terralib.types.newstruct('dynarray('..tostring(T)..')')
-	arr.entries = {
-		{'data', &T};
-		{'size', size_t};
-		{'len', size_t};
+	local struct P {
+		size: size_t;
+		len: size_t;
+		first_element: T;
 	}
+
+	--opaque wrapper
+	local arr = terralib.types.newstruct('dynarray('..tostring(T)..')')
+	arr.entries = {{'p', &P}}
 
 	local props = addproperties(arr)
 
+	props.len = macro(function(self) return `self.p.len end)
+	props.size = macro(function(self) return `self.p.size end)
+	props.elements = macro(function(self) return `&self.p.first_element end)
+
 	--storage
 
-	function arr.metamethods.__cast(from, to, exp)
-		if from:isunit() then --initalize with the empty tuple
-			return `arr {data = nil, size = 0, len = 0}
-		elseif T == int8 and from:ispointer() and from.type == int8 then
+	function arr.metamethods.___cast(from, to, exp)
+		if T == int8 and from:ispointer() and from.type == int8 then
 			--initialize with a null-terminated string
 			return quote
-				var arr: arr = {}
 				var len = strnlen(exp, maxint(size_t)-1)+1
-				if arr:realloc(len) then
-					memmove(arr.data, exp, len)
-					arr.len = len
+				var self: arr = {p = nil}
+				self:realloc(len)
+				if self.addr ~= nil then
+					memmove(self.elements, exp, len)
+					self.len = len
 				end
-				in arr
+				in self
 			end
+		elseif from == nil then
+			return `[&arr](nil)
+		else
+			error'invalid cast'
 		end
 	end
 
-	arr.methods.isview = macro(function(self) return `self.size < 0 end)
-
 	terra arr:realloc(size: size_t): bool
 		check(size >= 0)
-		if self:isview() then
-			return size <= self.len
+		var len: size_t
+		if self.p ~= nil then
+			if size == self.size then return true end
+			if size > self.size then --grow
+				size = max(size, self.size * growth_factor)
+			end
+			len = self.len
+		else
+			len = 0
 		end
-		if size == self.size then return true end
-		if size > self.size then --grow
-			size = max(size, self.size * growth_factor)
-		end
-		var new_data = [&T](realloc(self.data, sizeof(T) * size))
-		if size > 0 and new_data == nil then return false end
-		self.data = new_data
+		self.p = [&P](realloc(self.p, sizeof(P) + sizeof(T) * (size - 1)))
+		if self.p == nil then return false end
 		self.size = size
-		self.len = min(size, self.len)
+		self.len = min(size, len)
 		return true
 	end
 
 	terra arr:free()
-		self:realloc(0)
+		free(self.p)
+		self.p = nil
 	end
 
 	terra arr:shrink(): bool
@@ -106,28 +116,24 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 
 	--random access with auto-growing
 
-	arr.metamethods.__apply = terra(self: &arr, i: size_t): &T
-		if i < 0 then i = self.len - i end
-		check(i >= 0 and i < self.len)
-		return &self.data[i]
-	end
-
 	terra arr:get(i: size_t): &T
 		if i < 0 then i = self.len - i end
 		check(i >= 0 and i < self.len)
-		return &self.data[i]
+		return &self.elements[i]
 	end
+
+	arr.metamethods.__apply = macro(function(self, i) return `self:get(i) end)
 
 	terra arr:grow(i: size_t): bool
 		check(i >= 0)
-		if i >= self.size then --grow capacity
+		if self.p == nil or i >= self.size then --grow capacity
 			if not self:realloc(i+1) then
 				return false
 			end
 		end
 		if i >= self.len then --enlarge
 			if i >= self.len + 1 then --clear the gap
-				memset(self.data + self.len, 0, sizeof(T) * (i - self.len))
+				memset(&self.elements[self.len], 0, sizeof(T) * (i - self.len))
 			end
 			self.len = i + 1
 		end
@@ -136,9 +142,8 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 
 	terra arr:set(i: size_t, val: T): bool
 		if i < 0 then i = self.len - i end
-		if self:isview() then check(i < self.len) end
 		if not self:grow(i) then return false end
-		self.data[i] = val
+		self.elements[i] = val
 		return true
 	end
 
@@ -147,7 +152,7 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 	arr.metamethods.__for = function(self, body)
 		return quote
 			for i = 0, self.len do
-				[ body(`i, `&self.data[i]) ]
+				[ body(`i, `&self.elements[i]) ]
 			end
 		end
 	end
@@ -171,7 +176,7 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 		var b = max(0, self.len-i) --how many bytes must be moved
 		if not self:realloc(max(self.size, i+n+b)) then return false end
 		if b <= 0 then return true end
-		memmove(self.data+i+n, self.data+i, sizeof(T) * b)
+		memmove(&self.elements[i+n], &self.elements[i], sizeof(T) * b)
 		return true
 	end
 
@@ -183,7 +188,7 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 			check(i >= 0 and n >= 0)
 			var b = self.len-i-n --how many elements must be moved
 			if b > 0 then
-				memmove(self.data+i, self.data+i+n, sizeof(T) * b)
+				memmove(&self.elements[i], &self.elements[i+n], sizeof(T) * b)
 			end
 			self.len = self.len - min(n, self.len-i)
 		end
@@ -211,34 +216,53 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 		return i, j-i
 	end
 
-	terra arr:view(i: size_t, j: size_t) --NOTE: aliasing!
+	local struct view {
+		array: &arr;
+		start: size_t;
+		len: size_t;
+	}
+
+	local vprops = addproperties(view)
+
+	terra arr:view(i: size_t, j: size_t)
 		var start, len = self:range(i, j, true)
-		return arr {data = self.data+i, size = -i, len = len}
+		return view {array = self, start = start, len = len}
 	end
 
-	--array-to-array interface
+	vprops.elements = macro(function(self)
+		return `&self.array.elements[self.start]
+	end)
 
-	terra arr:update(i: size_t, a: &arr)
+	view.metamethods.__for = arr.metamethods.__for
+
+	--array-to-view/array interface
+
+	arr.methods.update = terralib.overloadedfunction('update', {})
+
+	arr.methods.update:adddefinition(terra(self: &arr, i: size_t, v: view)
 		if i < 0 then i = self.len - i end; check(i >= 0)
-		if a.len == 0 then return true end
-		var newlen = max(self.len, i+a.len)
+		if v.len == 0 then return true end
+		var newlen = max(self.len, i+v.len)
 		if newlen > self.len then
 			if not self:realloc(newlen) then return false end
 			if i >= self.len + 1 then --clear the gap
-				memset(self.data + self.len, 0, sizeof(T) * (i - self.len))
+				memset(&self.elements[self.len], 0, sizeof(T) * (i - self.len))
 			end
 			self.len = newlen
 		end
-		memmove(self.data+i, a.data, sizeof(T) * a.len)
+		memmove(&self.elements[i], v.elements, sizeof(T) * v.len)
 		return true
-	end
+	end)
+	arr.methods.update:adddefinition(terra(self: &arr, i: size_t, a: &arr)
+		return self:update(i, a:view(0, a.len))
+	end)
 
 	terra arr:extend(a: &arr)
 		return self:update(self.len, a)
 	end
 
 	terra arr:copy()
-		var a: arr = {}
+		var a = arr {p = nil}
 		a:update(0, self)
 		return a
 	end
@@ -269,7 +293,7 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 			if a.len ~= self.len then
 				return iif(self.len < a.len, -1, 1)
 			end
-			return memcmp(self.data, a.data, sizeof(T) * self.len)
+			return memcmp(self.elements, a.elements, sizeof(T) * self.len)
 		end
 	else
 		terra arr:compare(a: &arr)
@@ -299,7 +323,7 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 
 	arr.methods.sort:adddefinition(
 		terra(self: &arr, cmp: {&T, &T} -> int32)
-			qsort(self.data, self.len, sizeof(T), [{&opaque, &opaque} -> int32](cmp))
+			qsort(self.elements, self.len, sizeof(T), [{&opaque, &opaque} -> int32](cmp))
 			return self
 		end
 	)
@@ -344,17 +368,22 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 		end
 	end
 
+	local lt, gt, lte, gte
 	if user_cmp_asc then
-		props.lt  = terra(a: &T, b: &T) return cmp_asc(a, b) == -1 end
-		props.gt  = terra(a: &T, b: &T) return cmp_asc(a, b) ==  1 end
-		props.lte = terra(a: &T, b: &T) var r = cmp_asc(a, b) return r == -1 or r == 0 end
-		props.gte = terra(a: &T, b: &T) var r = cmp_asc(a, b) return r ==  1 or r == 0 end
+		lt  = terra(a: &T, b: &T) return cmp_asc(a, b) == -1 end
+		gt  = terra(a: &T, b: &T) return cmp_asc(a, b) ==  1 end
+		lte = terra(a: &T, b: &T) var r = cmp_asc(a, b) return r == -1 or r == 0 end
+		gte = terra(a: &T, b: &T) var r = cmp_asc(a, b) return r ==  1 or r == 0 end
 	elseif not T:isaggregate() then
-		props.lt  = terra(a: &T, b: &T) return @a <  @b end
-		props.gt  = terra(a: &T, b: &T) return @a >  @b end
-		props.lte = terra(a: &T, b: &T) return @a <= @b end
-		props.gte = terra(a: &T, b: &T) return @a >= @b end
+		lt  = terra(a: &T, b: &T) return @a <  @b end
+		gt  = terra(a: &T, b: &T) return @a >  @b end
+		lte = terra(a: &T, b: &T) return @a <= @b end
+		gte = terra(a: &T, b: &T) return @a >= @b end
 	end
+	props.lt  = macro(function() return lt  end)
+	props.gt  = macro(function() return gt  end)
+	props.lte = macro(function() return lte end)
+	props.gte = macro(function() return gte end)
 
 	arr.methods.binsearch = terralib.overloadedfunction('binsearch', {})
 
@@ -367,12 +396,12 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 			while true do
 				if lo < hi then
 					var mid: int = lo + (hi - lo) / 2
-					if cmp(&self.data[mid], &v) then
+					if cmp(&self.elements[mid], &v) then
 						lo = mid + 1
 					else
 						hi = mid
 					end
-				elseif lo == hi and not cmp(&self.data[lo], &v) then
+				elseif lo == hi and not cmp(&self.elements[lo], &v) then
 					return lo
 				else
 					return i
@@ -384,7 +413,7 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 	local cmp_lt = macro(function(t, i, v) return `t[i] < v end)
 	arr.methods.binsearch_macro = macro(function(self, v, cmp)
 		cmp = cmp or cmp_lt
-		return `binsearch(v, self.data, 0, self.len-1, cmp)
+		return `binsearch(v, self.elements, 0, self.len-1, cmp)
 	end)
 
 	--reversing
@@ -392,9 +421,9 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 	terra arr:reverse()
 		var j = self.len-1
 		for k = 0, (j+1)/2 do
-			var tmp = self.data[k]
-			self.data[k] = self.data[j-k]
-			self.data[j-k] = tmp
+			var tmp = self.elements[k]
+			self.elements[k] = self.elements[j-k]
+			self.elements[j-k] = tmp
 		end
 		return self
 	end
@@ -410,14 +439,6 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 			end
 		end
 	end)
-
-	--string interface
-
-	if T == int8 then
-
-		--TODO
-
-	end
 
 	return arr
 end
@@ -437,7 +458,7 @@ local dynarray = macro(
 		T = T and T:astype()
 		size_t = size_t and size_t:astype()
 		local arr = dynarray_type(T, cmp_asc, size_t, growth_factor)
-		return quote var a: arr = {} in a end
+		return `[&arr](nil)
 	end,
 	--calling it from Lua or from an escape or in a type declaration returns
 	--just the type, and you can also pass a custom C namespace.

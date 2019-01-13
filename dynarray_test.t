@@ -11,16 +11,16 @@ local cmp = terra(a: &int, b: &int): int32
 end
 
 local terra test_dynarray()
-	var arr: dynarray(int, nil, nil, nil, C) = {}
+	var arr: dynarray(int, nil, nil, nil, C)
 	var arr2 = dynarray(int)
 	var arr3 = new([dynarray(int)])
 	arr:set(15, 1234)
-	pr(arr.size, arr.len, arr:get(15))
+	pr(arr.size, arr.len, @arr(15))
 	arr:set(19, 4321)
 	check(@arr:get(19) == 4321)
 	var x = -1
-	for i,_ in arr do
-		arr:set(i, x)
+	for i,v in arr:view(5, 12) do
+		@v = x
 		x = x * 2
 	end
 	arr:sort(cmp)
@@ -35,7 +35,7 @@ for i,v in ipairs(C.__deps) do print(v) end
 --for k in pairs(C) do print(k) end
 test_dynarray()
 
-
+--[[
 local S = dynarray(int8)
 local terra test_arrayofstrings()
 	var arr = dynarray(S)
@@ -48,3 +48,4 @@ local terra test_arrayofstrings()
 	pr(arr.size, arr.len)
 end
 test_arrayofstrings()
+]]
