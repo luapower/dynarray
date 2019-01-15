@@ -5,43 +5,50 @@
 --stdlib deps: realloc, memset, memmove, memcmp, qsort, strnlen.
 --macro deps: iif, min, max, maxint, assert, binsearch, addproperties.
 
---[[ API
+--[[  API
+
 	local A = arr(T=int32, cmp_asc=f(&a<&b), size_t=int32, grow_factor=2, C=require'low')
 	var a = arr(T=int32, cmp_asc=f(a<b), size_t=int32, grow_factor=2)
 	var a = arr(&buffer, len, cmp_asc=f(a<b), size_t=int32, grow_factor=2)
-	var a: A = nil
-	var a = A(nil)
-	var a = A{}
-	a.len
+	var a: A = nil -- =nil is imortant! (clunky variant)
+	var a = A(nil) -- (nil) is important! (clunky variant)
 	a:free()
 	a:shrink()
-	a(i) -> &v
-	a:set(i, v) -> ok?
+	a:clear()
+
+	a.len
+	a|view:set(i, v) -> ok?
+	a|view:get(i) -> &v
+	a|view(i) -> &v
 	for i, &v in a|view do ... end
 	a:push(v) -> ok?
 	a:add(v) -> ok?
+	a:insert(i, v) -> ok?
 	a:pop() -> v
+
 	a:insert_junk(i, n) -> ok?
 	a:remove(i, [n])
-	a:clear()
-	a:range(i, j, truncate?) -> start, len
-	a:view(i, j) -> view
 	a:update(i, a|view|&v,len) -> ok?
 	a:extend(a|view|&v,len) -> ok?
 	a|view:copy([a|view|&v]) -> a|view|&v
-	a:insert(i, v) -> ok?
 	a:insert_array(i, a|view|&v,len) -> ok?
-	a:sort([cmp: {&T, &T} -> int32])
-	a:sort_desc()
-	a:find(v) -> i
-	a:count(v) -> n
-	a:binsearch(v, cmp: {&T, &T} -> bool) -> i
-	a:binsearch(v, a.lt|a.lte|a.gt|a.gte) -> i
-	a:binsearch_macro(v, cmp(t, i, v) -> bool) -> i
-	a:compare(b) -> -1|0|1
-	a:equals(b) -> ?
+
+	a|view:range(i, j, truncate?) -> start, len
+	a|view:view(i, j) -> view
+
+	a|view:sort([cmp: {&T, &T} -> int32])
+	a|view:sort_desc()
+	a|view:find(v) -> i
+	a|view:count(v) -> n
+	a|view:binsearch(v, cmp: {&T, &T} -> bool) -> i
+	a|view:binsearch(v, a.lt|a.lte|a.gt|a.gte) -> i
+	a|view:binsearch_macro(v, cmp(t, i, v) -> bool) -> i
+	a|view:compare(b) -> -1|0|1
+	a|view:equals(b) -> ?
+
 	a:reverse()
 	a:call(method, args...)
+
 ]]
 
 if not ... then require'dynarray_test'; return end
@@ -84,7 +91,7 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 			return quote
 				var len = strnlen(exp, maxint(size_t)-1)+1
 				var self = arr(nil)
-				if self:realloc(len) then
+				if self:resize(len) then
 					memmove(self.elements, exp, len)
 					self.len = len
 				end
@@ -97,7 +104,7 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 		end
 	end
 
-	terra arr:realloc(size: size_t): bool
+	terra arr:resize(size: size_t): bool
 		assert(size >= 0)
 		if size == self.size then return true end
 		if size == 0 then self:free(); return true end
@@ -122,21 +129,23 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 
 	terra arr:shrink(): bool
 		if self.size == self.len then return true end
-		return self:realloc(self.len)
+		return self:resize(self.len)
 	end
 
 	--random access with auto-growing
 
-	arr.metamethods.__apply = terra(self: &arr, i: size_t): &T
+	terra arr:get(i: size_t): &T
 		if i < 0 then i = self.len - i end
 		assert(i >= 0 and i < self.len)
 		return &self.elements[i]
 	end
 
+	arr.metamethods.__apply = arr.methods.get
+
 	terra arr:grow(i: size_t): bool
 		assert(i >= 0)
 		if i >= self.size then --grow capacity
-			if not self:realloc(i+1) then
+			if not self:resize(i+1) then
 				return false
 			end
 		end
@@ -183,7 +192,7 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 		if i < 0 then i = self.len - i end
 		assert(i >= 0 and n >= 0)
 		var b = max(0, self.len-i) --how many bytes must be moved
-		if not self:realloc(max(self.size, i+n+b)) then return false end
+		if not self:resize(max(self.size, i+n+b)) then return false end
 		if b <= 0 then return true end
 		memmove(&self.elements[i+n], &self.elements[i], sizeof(T) * b)
 		return true
@@ -211,8 +220,16 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 
 	--view interface
 
+	local struct view {
+		array: &arr;
+		start: size_t;
+		len: size_t;
+	}
+
+	local viewprops = addproperties(view)
+
 	--NOTE: j is not the last position, but one position after that!
-	terra arr:range(i: size_t, j: size_t, truncate: bool)
+	terra view:range(i: size_t, j: size_t, truncate: bool)
 		if i < 0 then i = self.len - i end
 		if j < 0 then j = self.len - j end
 		assert(i >= 0)
@@ -221,13 +238,14 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 		return i, j-i
 	end
 
-	local struct view {
-		array: &arr;
-		start: size_t;
-		len: size_t;
-	}
+	terra view:view(i: size_t, j: size_t)
+		var start, len = self:range(i, j, true)
+		return view {array = self.array, start = self.start + start, len = len}
+	end
 
-	local viewprops = addproperties(view)
+	terra arr:range(i: size_t, j: size_t, truncate: bool)
+		return view {array = nil, start = 0, len = self.len}:range(i, j, truncate)
+	end
 
 	terra arr:view(i: size_t, j: size_t)
 		var start, len = self:range(i, j, true)
@@ -238,11 +256,25 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 		return `&self.array.elements[self.start]
 	end)
 
-	view.metamethods.__apply = macro(function(self, i)
-		return `self.array(self.start + i)
-	end)
+	terra view:get(i: size_t): &T
+		return self.array:get(self.start + i)
+	end
 
-	view.metamethods.__for = arr.metamethods.__for
+	view.metamethods.__apply = view.methods.get
+
+	terra view:set(i: size_t, val: T): bool
+		if i < 0 then i = self.len - i end
+		assert(i >= 0 and i < self.len)
+		return self.array:set(self.start + i, val)
+	end
+
+	view.metamethods.__for = function(self, body)
+		return quote
+			for i = 0, self.len do
+				[ body(`i, `&self.elements[i]) ]
+			end
+		end
+	end
 
 	view.methods.copy = terralib.overloadedfunction('copy', {})
 	view.methods.copy:adddefinition(terra(self: &view, dst: &T)
@@ -266,7 +298,7 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 		if len == 0 then return true end
 		var newlen = max(self.len, i+len)
 		if newlen > self.len then
-			if not self:realloc(newlen) then return false end
+			if not self:resize(newlen) then return false end
 			if i >= self.len + 1 then --clear the gap
 				memset(&self.elements[self.len], 0, sizeof(T) * (i - self.len))
 			end
@@ -363,21 +395,21 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 
 	--sorting
 
-	arr.methods.sort = terralib.overloadedfunction('sort', {})
-
-	arr.methods.sort:adddefinition(terra(self: &arr, cmp: {&T, &T} -> int32)
+	view.methods.sort = terralib.overloadedfunction('sort', {})
+	arr .methods.sort = terralib.overloadedfunction('sort', {})
+	view.methods.sort:adddefinition(terra(self: &view, cmp: {&T, &T} -> int32)
 		qsort(self.elements, self.len, sizeof(T),
 			[{&opaque, &opaque} -> int32](cmp))
 		return self
 	end)
-
+	arr.methods.sort:adddefinition(terra(self: &arr, cmp: {&T, &T} -> int32)
+		return self:view(0, self.len):sort(cmp)
+	end)
 	if cmp_asc then
-		arr.methods.sort:adddefinition(terra(self: &arr)
-			return self:sort(cmp_asc)
-		end)
-		terra arr:sort_desc()
-			return self:sort(cmp_desc)
-		end
+		view.methods.sort:adddefinition(terra(self: &view) return self:sort(cmp_asc) end)
+		arr .methods.sort:adddefinition(terra(self: &arr ) return self:sort(cmp_asc) end)
+		terra view:sort_desc() return self:sort(cmp_desc) end
+		terra arr :sort_desc() return self:sort(cmp_desc) end
 	end
 
 	--searching
@@ -389,7 +421,7 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 			and macro(function(a, b) return `a == b end)
 
 	if equal then
-		terra arr:find(val: T)
+		terra view:find(val: T)
 			for i,v in self do
 				if equal(@v, val) then
 					return i
@@ -397,8 +429,11 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 			end
 			return -1
 		end
+		terra arr:find(val: T)
+			return self:view(0, self.len):find(val)
+		end
 
-		terra arr:count(val: T)
+		terra view:count(val: T)
 			var n: size_t = 0
 			for i,v in self do
 				if equal(@v, val) then
@@ -406,6 +441,9 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 				end
 			end
 			return n
+		end
+		terra arr:count(val: T)
+			return self:view(0, self.len):count(val)
 		end
 	end
 
@@ -430,9 +468,10 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 		props.gte = macro(function() return gte end)
 	end
 
-	arr.methods.binsearch = terralib.overloadedfunction('binsearch', {})
-	arr.methods.binsearch:adddefinition(
-	terra(self: &arr, v: T, cmp: {&T, &T} -> bool): size_t
+	view.methods.binsearch = terralib.overloadedfunction('binsearch', {})
+	arr .methods.binsearch = terralib.overloadedfunction('binsearch', {})
+	view.methods.binsearch:adddefinition(
+	terra(self: &view, v: T, cmp: {&T, &T} -> bool): size_t
 		var lo = [size_t](0)
 		var hi = self.len-1
 		var i = hi + 1
@@ -451,21 +490,29 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 			end
 		end
 	end)
+	arr.methods.binsearch:adddefinition(
+	terra(self: &arr, v: T, cmp: {&T, &T} -> bool): size_t
+		return self:view(0, self.len):binsearch(v, cmp)
+	end)
 	if lt then
-		arr.methods.binsearch:adddefinition(terra(self: &arr, v: T): size_t
+		view.methods.binsearch:adddefinition(terra(self: &view, v: T): size_t
 			return self:binsearch(v, lt)
+		end)
+		arr.methods.binsearch:adddefinition(terra(self: &arr, v: T): size_t
+			return self:view(0, self.len):binsearch(v, lt)
 		end)
 	end
 
 	local cmp_lt = macro(function(t, i, v) return `t[i] < v end)
-	arr.methods.binsearch_macro = macro(function(self, v, cmp)
+	view.methods.binsearch_macro = macro(function(self, v, cmp)
 		cmp = cmp or cmp_lt
 		return `binsearch(v, self.elements, 0, self.len-1, cmp)
 	end)
+	arr.methods.binsearch_macro = view.methods.binsearch_macro
 
 	--reversing
 
-	terra arr:reverse()
+	terra view:reverse()
 		var j = self.len-1
 		for k = 0, (j+1)/2 do
 			var tmp = self.elements[k]
@@ -474,9 +521,13 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 		end
 		return self
 	end
+	terra arr:reverse()
+		return self:view(0, self.len):reverse()
+	end
 
 	--calling methods on the elements
-	arr.methods.call = macro(function(self, method_name, ...)
+
+	view.methods.call = macro(function(self, method_name, ...)
 		local method = T.methods[method_name:asvalue()]
 		local args = {...}
 		return quote
@@ -485,6 +536,7 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 			end
 		end
 	end)
+	arr.methods.call = view.methods.call
 
 	return arr
 end
