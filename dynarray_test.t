@@ -1,15 +1,12 @@
 
 setfenv(1, require'low')
-local dynarray = require'dynarray'
-setfenv(dynarray.fromterra, getfenv())
-setfenv(dynarray.fromlua, getfenv())
 
 local cmp = terra(a: &int, b: &int): int32
 	return iif(@a < @b, -1, iif(@a > @b, 1, 0))
 end
 
 local terra test_dynarray()
-	var arr: dynarray(int, nil, nil, nil, getfenv())
+	var arr: dynarray(int, nil, nil, nil, getfenv()) = nil
 	var arr2 = dynarray(int)
 	var arr3 = new([dynarray(int)])
 	arr:set(15, 1234)
@@ -29,10 +26,7 @@ local terra test_dynarray()
 	print('binsearch_macro -5000: ', arr:binsearch_macro(-5000))
 	arr:free()
 end
---for k in pairs(C) do print(k) end
-test_dynarray()
 
---[[
 local S = dynarray(int8)
 local terra test_arrayofstrings()
 	var arr = dynarray(S)
@@ -40,10 +34,25 @@ local terra test_arrayofstrings()
 	arr:add(S'World!')
 	print(arr.len, @arr(0), @arr(1))
 	arr:call'free'
-	print(arr(0).size, arr(0).len)
+	assert(arr(0).size == 0)
+	assert(arr(0).len == 0)
 	arr:free()
-	print(arr.size, arr.len)
+	assert(arr.size == 0)
+	assert(arr.len == 0)
 end
-test_arrayofstrings()
-]]
 
+local terra test_wrap()
+	var len = 10
+	var buf = new(int8, len)
+	buf[5] = 123
+	var arr = dynarray(buf, len)
+	assert(@arr(5) == 123)
+	var s = tostring('hello')
+	print(s.len, s.elements)
+	s:free()
+	arr:free()
+end
+
+test_dynarray()
+test_arrayofstrings()
+test_wrap()
