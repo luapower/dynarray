@@ -431,7 +431,7 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 		return self
 	end
 
-	--calling methods on the children
+	--calling methods on the elements
 
 	arr.methods.call = macro(function(self, method_name, ...)
 		local method = T.methods[method_name:asvalue()]
