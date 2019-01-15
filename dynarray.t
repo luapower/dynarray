@@ -8,12 +8,11 @@
 --[[ API
 
 a = dynarray(T=int32, size_t=int32, grow_factor=2)
-a: dynarray(T=int32, size_t=int32, grow_factor=2, C=require'low'.C) = {}
+a: dynarray(T=int32, size_t=int32, grow_factor=2, C=require'low') = {}
 a.len
 a:free()
 a:shrink()
 a(i) -> &v
-a:get(i) -> &v
 a:set(i, v) -> ok?
 for i, &v in a do ... end
 a:push(v) -> ok?
@@ -23,12 +22,12 @@ a:insert_junk(i, n) -> ok?
 a:remove(i, [n])
 a:clear()
 a:range(i, j, truncate?) -> start, len
-a:view(i, j) -> a
-a:update(i, &a) -> ok?
-a:extend(&a) -> ok?
+a:view(i, j) -> view
+a:update(i, a|view) -> ok?
+a:extend(a|view) -> ok?
 a:copy() -> a
 a:insert(i, v) -> ok?
-a:insert_array(i, &a) -> ok?
+a:insert_array(i, a) -> ok?
 a:sort([cmp: {&T, &T} -> int32])
 a:sort_desc()
 a:find(v) -> i
@@ -86,7 +85,7 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 	end
 
 	terra arr:realloc(size: size_t): bool
-		check(size >= 0)
+		assert(size >= 0)
 		var len: size_t
 		if self.p ~= nil then
 			if size == self.size then return true end
@@ -116,16 +115,14 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 
 	--random access with auto-growing
 
-	terra arr:get(i: size_t): &T
+	arr.metamethods.__apply = terra(self: &arr, i: size_t): &T
 		if i < 0 then i = self.len - i end
-		check(i >= 0 and i < self.len)
+		assert(i >= 0 and i < self.len)
 		return &self.elements[i]
 	end
 
-	arr.metamethods.__apply = macro(function(self, i) return `self:get(i) end)
-
 	terra arr:grow(i: size_t): bool
-		check(i >= 0)
+		assert(i >= 0)
 		if self.p == nil or i >= self.size then --grow capacity
 			if not self:realloc(i+1) then
 				return false
@@ -163,7 +160,7 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 	terra arr:add (val: T) return self:set(self.len, val) end
 
 	terra arr:pop()
-		var v = self:get(-1)
+		var v = self(-1)
 		self.len = self.len - 1
 		return v
 	end
@@ -172,7 +169,7 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 
 	terra arr:insert_junk(i: size_t, n: size_t)
 		if i < 0 then i = self.len - i end
-		check(i >= 0 and n >= 0)
+		assert(i >= 0 and n >= 0)
 		var b = max(0, self.len-i) --how many bytes must be moved
 		if not self:realloc(max(self.size, i+n+b)) then return false end
 		if b <= 0 then return true end
@@ -185,7 +182,7 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 	arr.methods.remove:adddefinition(
 		terra(self: &arr, i: size_t, n: size_t)
 			if i < 0 then i = self.len - i end
-			check(i >= 0 and n >= 0)
+			assert(i >= 0 and n >= 0)
 			var b = self.len-i-n --how many elements must be moved
 			if b > 0 then
 				memmove(&self.elements[i], &self.elements[i+n], sizeof(T) * b)
@@ -210,7 +207,7 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 	terra arr:range(i: size_t, j: size_t, truncate: bool)
 		if i < 0 then i = self.len - i end
 		if j < 0 then j = self.len - j end
-		check(i >= 0)
+		assert(i >= 0)
 		j = max(i, j)
 		if truncate then j = min(self.len, j) end
 		return i, j-i
@@ -222,14 +219,14 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 		len: size_t;
 	}
 
-	local vprops = addproperties(view)
+	local viewprops = addproperties(view)
 
 	terra arr:view(i: size_t, j: size_t)
 		var start, len = self:range(i, j, true)
 		return view {array = self, start = start, len = len}
 	end
 
-	vprops.elements = macro(function(self)
+	viewprops.elements = macro(function(self)
 		return `&self.array.elements[self.start]
 	end)
 
@@ -240,7 +237,7 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 	arr.methods.update = terralib.overloadedfunction('update', {})
 
 	arr.methods.update:adddefinition(terra(self: &arr, i: size_t, v: view)
-		if i < 0 then i = self.len - i end; check(i >= 0)
+		if i < 0 then i = self.len - i end; assert(i >= 0)
 		if v.len == 0 then return true end
 		var newlen = max(self.len, i+v.len)
 		if newlen > self.len then
@@ -253,17 +250,21 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 		memmove(&self.elements[i], v.elements, sizeof(T) * v.len)
 		return true
 	end)
-	arr.methods.update:adddefinition(terra(self: &arr, i: size_t, a: &arr)
+	arr.methods.update:adddefinition(terra(self: &arr, i: size_t, a: arr)
 		return self:update(i, a:view(0, a.len))
 	end)
 
-	terra arr:extend(a: &arr)
+	arr.methods.extend = terralib.overloadedfunction('extend', {})
+	arr.methods.extend:adddefinition(terra(self: &arr, v: view)
+		return self:update(self.len, v)
+	end)
+	arr.methods.extend:adddefinition(terra(self: &arr, a: arr)
 		return self:update(self.len, a)
-	end
+	end)
 
 	terra arr:copy()
 		var a = arr {p = nil}
-		a:update(0, self)
+		a:update(0, @self)
 		return a
 	end
 
@@ -272,7 +273,8 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 	end
 
 	--NOTE: can't overload insert() because a could be T can be an &arr.
-	terra arr:insert_array(i: size_t, a: &arr)
+	arr.methods.insert_array = terralib.overloadedfunction('insert_array', {})
+	terra arr:insert_array(i: size_t, a: arr)
 		return self:insert_junk(i, a.len) and self:update(i, a)
 	end
 
@@ -323,7 +325,8 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 
 	arr.methods.sort:adddefinition(
 		terra(self: &arr, cmp: {&T, &T} -> int32)
-			qsort(self.elements, self.len, sizeof(T), [{&opaque, &opaque} -> int32](cmp))
+			qsort(self.elements, self.len, sizeof(T),
+				[{&opaque, &opaque} -> int32](cmp))
 			return self
 		end
 	)
@@ -448,7 +451,7 @@ local dynarray_type = terralib.memoize(
 		T = T or int32
 		size_t = size_t or int32
 		growth_factor = growth_factor or 2
-		C = C or require'low'.C
+		C = C or require'low'
 		return dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 	end)
 
