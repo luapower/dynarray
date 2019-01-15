@@ -6,43 +6,47 @@
 --macro deps: iif, min, max, maxint, assert, binsearch, addproperties.
 
 --[[ API
-
-a = dynarray(T=int32, size_t=int32, grow_factor=2)
-a: dynarray(T=int32, size_t=int32, grow_factor=2, C=require'low') = {}
-a.len
-a:free()
-a:shrink()
-a(i) -> &v
-a:set(i, v) -> ok?
-for i, &v in a|view do ... end
-a:push(v) -> ok?
-a:add(v) -> ok?
-a:pop() -> v
-a:insert_junk(i, n) -> ok?
-a:remove(i, [n])
-a:clear()
-a:range(i, j, truncate?) -> start, len
-a:view(i, j) -> view
-a:update(i, a|view|&v,len) -> ok?
-a:extend(a|view|&v,len) -> ok?
-a|view:copy([a|view|&v]) -> a|view|&v
-a:insert(i, v) -> ok?
-a:insert_array(i, a|view|&v,len) -> ok?
-a:sort([cmp: {&T, &T} -> int32])
-a:sort_desc()
-a:find(v) -> i
-a:count(v) -> n
-a:binsearch(v, cmp: {&T, &T} -> bool) -> i
-a:binsearch(v, a.lt|a.lte|a.gt|a.gte) -> i
-a:binsearch_macro(v, cmp(t, i, v) -> bool) -> i
-a:compare(b) -> -1|0|1
-a:equals(b) -> ?
-a:reverse()
+	local A = arr(T=int32, cmp_asc=f(&a<&b), size_t=int32, grow_factor=2, C=require'low')
+	var a = arr(T=int32, cmp_asc=f(a<b), size_t=int32, grow_factor=2)
+	var a = arr(&buffer, len, cmp_asc=f(a<b), size_t=int32, grow_factor=2)
+	var a: A = nil
+	var a = A(nil)
+	var a = A{}
+	a.len
+	a:free()
+	a:shrink()
+	a(i) -> &v
+	a:set(i, v) -> ok?
+	for i, &v in a|view do ... end
+	a:push(v) -> ok?
+	a:add(v) -> ok?
+	a:pop() -> v
+	a:insert_junk(i, n) -> ok?
+	a:remove(i, [n])
+	a:clear()
+	a:range(i, j, truncate?) -> start, len
+	a:view(i, j) -> view
+	a:update(i, a|view|&v,len) -> ok?
+	a:extend(a|view|&v,len) -> ok?
+	a|view:copy([a|view|&v]) -> a|view|&v
+	a:insert(i, v) -> ok?
+	a:insert_array(i, a|view|&v,len) -> ok?
+	a:sort([cmp: {&T, &T} -> int32])
+	a:sort_desc()
+	a:find(v) -> i
+	a:count(v) -> n
+	a:binsearch(v, cmp: {&T, &T} -> bool) -> i
+	a:binsearch(v, a.lt|a.lte|a.gt|a.gte) -> i
+	a:binsearch_macro(v, cmp(t, i, v) -> bool) -> i
+	a:compare(b) -> -1|0|1
+	a:equals(b) -> ?
+	a:reverse()
+	a:call(method, args...)
 ]]
 
 if not ... then require'dynarray_test'; return end
 
-local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
+local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 
 	setfenv(1, C)
 
@@ -57,7 +61,7 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 
 	function arr.metamethods.__typename(self)
 		local _ = _empty
-		return 'dynarray('..tostring(T)..')'
+		return 'arr('..tostring(T)..')'
 	end
 
 	function arr.metamethods.__tostring(self, format_arg, fmt, args, freelist)
@@ -187,23 +191,19 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 
 	arr.methods.remove = terralib.overloadedfunction('remove', {})
 
-	arr.methods.remove:adddefinition(
-		terra(self: &arr, i: size_t, n: size_t)
-			if i < 0 then i = self.len - i end
-			assert(i >= 0 and n >= 0)
-			var b = self.len-i-n --how many elements must be moved
-			if b > 0 then
-				memmove(&self.elements[i], &self.elements[i+n], sizeof(T) * b)
-			end
-			self.len = self.len - min(n, self.len-i)
+	arr.methods.remove:adddefinition(terra(self: &arr, i: size_t, n: size_t)
+		if i < 0 then i = self.len - i end
+		assert(i >= 0 and n >= 0)
+		var b = self.len-i-n --how many elements must be moved
+		if b > 0 then
+			memmove(&self.elements[i], &self.elements[i+n], sizeof(T) * b)
 		end
-	)
+		self.len = self.len - min(n, self.len-i)
+	end)
 
-	arr.methods.remove:adddefinition(
-		terra(self: &arr, i: size_t)
-			self:remove(i, 1)
-		end
-	)
+	arr.methods.remove:adddefinition(terra(self: &arr, i: size_t)
+		self:remove(i, 1)
+	end)
 
 	terra arr:clear()
 		self.len = 0
@@ -365,20 +365,16 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 
 	arr.methods.sort = terralib.overloadedfunction('sort', {})
 
-	arr.methods.sort:adddefinition(
-		terra(self: &arr, cmp: {&T, &T} -> int32)
-			qsort(self.elements, self.len, sizeof(T),
-				[{&opaque, &opaque} -> int32](cmp))
-			return self
-		end
-	)
+	arr.methods.sort:adddefinition(terra(self: &arr, cmp: {&T, &T} -> int32)
+		qsort(self.elements, self.len, sizeof(T),
+			[{&opaque, &opaque} -> int32](cmp))
+		return self
+	end)
 
 	if cmp_asc then
-		arr.methods.sort:adddefinition(
-			terra(self: &arr)
-				return self:sort(cmp_asc)
-			end
-		)
+		arr.methods.sort:adddefinition(terra(self: &arr)
+			return self:sort(cmp_asc)
+		end)
 		terra arr:sort_desc()
 			return self:sort(cmp_desc)
 		end
@@ -413,6 +409,8 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 		end
 	end
 
+	--binary search for an insert position that keeps the array sorted.
+
 	local lt, gt, lte, gte
 	if user_cmp_asc then
 		lt  = terra(a: &T, b: &T) return cmp_asc(a, b) == -1 end
@@ -425,35 +423,39 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 		lte = terra(a: &T, b: &T) return @a <= @b end
 		gte = terra(a: &T, b: &T) return @a >= @b end
 	end
-	props.lt  = macro(function() return lt  end)
-	props.gt  = macro(function() return gt  end)
-	props.lte = macro(function() return lte end)
-	props.gte = macro(function() return gte end)
+	if lt then
+		props.lt  = macro(function() return lt  end)
+		props.gt  = macro(function() return gt  end)
+		props.lte = macro(function() return lte end)
+		props.gte = macro(function() return gte end)
+	end
 
 	arr.methods.binsearch = terralib.overloadedfunction('binsearch', {})
-
-	--binary search for an insert position that keeps the array sorted.
 	arr.methods.binsearch:adddefinition(
-		terra(self: &arr, v: T, cmp: {&T, &T} -> bool): size_t
-			var lo = [size_t](0)
-			var hi = self.len-1
-			var i = hi + 1
-			while true do
-				if lo < hi then
-					var mid: int = lo + (hi - lo) / 2
-					if cmp(&self.elements[mid], &v) then
-						lo = mid + 1
-					else
-						hi = mid
-					end
-				elseif lo == hi and not cmp(&self.elements[lo], &v) then
-					return lo
+	terra(self: &arr, v: T, cmp: {&T, &T} -> bool): size_t
+		var lo = [size_t](0)
+		var hi = self.len-1
+		var i = hi + 1
+		while true do
+			if lo < hi then
+				var mid: int = lo + (hi - lo) / 2
+				if cmp(&self.elements[mid], &v) then
+					lo = mid + 1
 				else
-					return i
+					hi = mid
 				end
+			elseif lo == hi and not cmp(&self.elements[lo], &v) then
+				return lo
+			else
+				return i
 			end
 		end
-	)
+	end)
+	if lt then
+		arr.methods.binsearch:adddefinition(terra(self: &arr, v: T): size_t
+			return self:binsearch(v, lt)
+		end)
+	end
 
 	local cmp_lt = macro(function(t, i, v) return `t[i] < v end)
 	arr.methods.binsearch_macro = macro(function(self, v, cmp)
@@ -474,7 +476,6 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 	end
 
 	--calling methods on the elements
-
 	arr.methods.call = macro(function(self, method_name, ...)
 		local method = T.methods[method_name:asvalue()]
 		local args = {...}
@@ -485,63 +486,38 @@ local function dynarray_type(T, cmp_asc, size_t, growth_factor, C)
 		end
 	end)
 
-	--filling from APIs that follow the "protocol" of calling the function
-	--once with output size 0 to get the needed size, then calling it
-	--again .
-
-	--[[
-	arr.methods.fill_from_api = macro(function(self, api_func, init_len)
-		init_len = init_len or 0
-		return quote
-			if init_len then
-				self:insert_junk(
-
-			var len = 0
-			var len = [init_len]
-			while len >= maxn do
-				if outbuf ~= nil then free(outbuf) end
-				maxn = n + 1
-				outbuf = new(&int8, maxn)
-				if outbuf == nil then return nil end
-				n = [ api_func(self) ]
-				if n < 0 then free(outbuf); return nil end
-			end
-		end
-	end)
-	]]
-
 	return arr
 end
-dynarray_type = terralib.memoize(dynarray_type)
+arr_type = terralib.memoize(arr_type)
 
-local dynarray_type = function(T, cmp_asc, size_t, growth_factor, C)
+local arr_type = function(T, cmp_asc, size_t, growth_factor, C)
 	T = T or int32
 	size_t = size_t or int32
 	growth_factor = growth_factor or 2
 	C = C or require'low'
-	return dynarray_type(T, cmp_asc, size_t, growth_factor, C)
+	return arr_type(T, cmp_asc, size_t, growth_factor, C)
 end
 
-local dynarray = macro(
+local arr = macro(
 	--calling it from Terra returns a new array.
 	function(arg1, ...)
 		local T, lval, size, cmp_asc, size_t, growth_factor
-		if arg1 and arg1:islvalue() then --wrap raw pointer: dynarray(&v, size, ...)
-			lval, size, cmp_asc, size_t, growth_factor = arg1, ...
+		if arg1 and arg1:islvalue() then --wrap raw pointer: arr(&v, len, ...)
+			lval, len, cmp_asc, size_t, growth_factor = arg1, ...
 			T = lval:gettype()
 			assert(T:ispointer())
 			T = T.type
-		else --create new array: dynarray(T, ...)
+		else --create new array: arr(T, ...)
 			T, cmp_asc, size_t, growth_factor = arg1, ...
 			T = T and T:astype()
 		end
 		size_t = size_t and size_t:astype()
 		growth_factor = growth_factor and growth_factor:asvalue()
-		local arr = dynarray_type(T, cmp_asc, size_t, growth_factor)
+		local arr = arr_type(T, cmp_asc, size_t, growth_factor)
 		if lval then
 			return quote
 				var a = arr(nil)
-				a:update(0, lval, size)
+				a:update(0, lval, len)
 				in a
 			end
 		else
@@ -550,7 +526,7 @@ local dynarray = macro(
 	end,
 	--calling it from Lua or from an escape or in a type declaration returns
 	--just the type, and you can also pass a custom C namespace.
-	dynarray_type
+	arr_type
 )
 
-return dynarray
+return arr
