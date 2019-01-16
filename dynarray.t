@@ -18,8 +18,11 @@
 	a:resize(min_size)
 	a.len
 
+	a|view:range(i, j, truncate?) -> start, len
+	a|view:view(i, j) -> view
+
 	a|view:set(i, v) -> ok?
-	a|view:getref(i) -> &v|nil
+	a|view:byref(i) -> &v|nil
 	a|view:get(i) -> v
 	a|view(i) -> &v
 	for i, &v in a|view do ... end
@@ -35,9 +38,6 @@
 	a|view:copy([a|view|&v]) -> a|view|&v
 	a:insert_array(i, a|view|&v,len) -> ok?
 
-	a|view:range(i, j, truncate?) -> start, len
-	a|view:view(i, j) -> view
-
 	a|view:sort([cmp: {&T, &T} -> int32])
 	a|view:sort_desc()
 	a|view:find(v) -> i
@@ -48,8 +48,8 @@
 	a|view:compare(b) -> -1|0|1
 	a|view:equals(b) -> ?
 
-	a:reverse()
-	a:call(method, args...)
+	a|view:reverse()
+	a|view:call(method, args...)
 
 ]]
 
@@ -138,7 +138,7 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 
 	--random access with auto-growing
 
-	terra arr:getref(i: size_t): &T
+	terra arr:byref(i: size_t): &T
 		if i < 0 then i = self.len - i end
 		return iif(i >= 0 and i < self.len, &self.elements[i], nil)
 	end
@@ -264,8 +264,8 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 		return `&self.array.elements[self.start]
 	end)
 
-	terra view:getref(i: size_t): &T
-		return self.array:getref(self.start + i)
+	terra view:byref(i: size_t): &T
+		return self.array:byref(self.start + i)
 	end
 
 	terra view:get(i: size_t): T
