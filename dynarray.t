@@ -7,18 +7,20 @@
 
 --[[  API
 
-	local A = arr(T=int32, cmp_asc=f(&a<&b), size_t=int32, grow_factor=2, C=require'low')
-	var a = arr(T=int32, cmp_asc=f(a<b), size_t=int32, grow_factor=2)
-	var a = arr(&buffer, len, cmp_asc=f(a<b), size_t=int32, grow_factor=2)
-	var a: A = nil -- =nil is imortant! (clunky variant)
-	var a = A(nil) -- (nil) is important! (clunky variant)
+	local A = arr(T=int32, cmp=f(&a<&b), size_t=int32, grow_factor=2, C=require'low')
+	var a = arr(T=int32, cmp=f(a<b), size_t=int32, grow_factor=2)
+	var a = arr(&buffer, len, cmp=f(a<b), size_t=int32, grow_factor=2)
+	var a: A = nil -- =nil is imortant!
+	var a = A(nil) -- (nil) is important!
 	a:free()
-	a:shrink()
 	a:clear()
-
+	a:shrink()
+	a:resize(min_size)
 	a.len
+
 	a|view:set(i, v) -> ok?
-	a|view:get(i) -> &v
+	a|view:getref(i) -> &v|nil
+	a|view:get(i) -> v
 	a|view(i) -> &v
 	for i, &v in a|view do ... end
 	a:push(v) -> ok?
@@ -53,7 +55,9 @@
 
 if not ... then require'dynarray_test'; return end
 
-local function arr_type(T, cmp_asc, size_t, growth_factor, C)
+local overload = terralib.overloadedfunction
+
+local function arr_type(T, cmp, size_t, growth_factor, C)
 
 	setfenv(1, C)
 
@@ -134,17 +138,21 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 
 	--random access with auto-growing
 
-	terra arr:get(i: size_t): &T
+	terra arr:getref(i: size_t): &T
 		if i < 0 then i = self.len - i end
-		assert(i >= 0 and i < self.len)
-		return &self.elements[i]
+		return iif(i >= 0 and i < self.len, &self.elements[i], nil)
 	end
 
+	terra arr:get(i: size_t): T
+		if i < 0 then i = self.len - i end
+		assert(i >= 0 and i < self.len)
+		return self.elements[i]
+	end
 	arr.metamethods.__apply = arr.methods.get
 
 	terra arr:grow(i: size_t): bool
 		assert(i >= 0)
-		if i >= self.size then --grow capacity
+		if i >= self.size then --grow size
 			if not self:resize(i+1) then
 				return false
 			end
@@ -198,7 +206,7 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 		return true
 	end
 
-	arr.methods.remove = terralib.overloadedfunction('remove', {})
+	arr.methods.remove = overload('remove', {})
 
 	arr.methods.remove:adddefinition(terra(self: &arr, i: size_t, n: size_t)
 		if i < 0 then i = self.len - i end
@@ -256,10 +264,13 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 		return `&self.array.elements[self.start]
 	end)
 
-	terra view:get(i: size_t): &T
-		return self.array:get(self.start + i)
+	terra view:getref(i: size_t): &T
+		return self.array:getref(self.start + i)
 	end
 
+	terra view:get(i: size_t): T
+		return self.array:get(self.start + i)
+	end
 	view.metamethods.__apply = view.methods.get
 
 	terra view:set(i: size_t, val: T): bool
@@ -276,7 +287,7 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 		end
 	end
 
-	view.methods.copy = terralib.overloadedfunction('copy', {})
+	view.methods.copy = overload('copy', {})
 	view.methods.copy:adddefinition(terra(self: &view, dst: &T)
 		memmove(dst, self.elements, self.len)
 		return dst
@@ -292,7 +303,7 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 
 	--array-to-view/array interface
 
-	arr.methods.update = terralib.overloadedfunction('update', {})
+	arr.methods.update = overload('update', {})
 	arr.methods.update:adddefinition(terra(self: &arr, i: size_t, p: &T, len: size_t)
 		if i < 0 then i = self.len - i end; assert(i >= 0)
 		if len == 0 then return true end
@@ -314,7 +325,7 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 		return self:update(i, a:view(0, a.len))
 	end)
 
-	arr.methods.extend = terralib.overloadedfunction('extend', {})
+	arr.methods.extend = overload('extend', {})
 	arr.methods.extend:adddefinition(terra(self: &arr, p: &T, len: size_t)
 		return self:update(self.len, p, len)
 	end)
@@ -325,7 +336,7 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 		return self:update(self.len, a)
 	end)
 
-	arr.methods.copy = terralib.overloadedfunction('copy', {})
+	arr.methods.copy = overload('copy', {})
 	arr.methods.copy:adddefinition(terra(self: &arr)
 		var a = arr(nil)
 		a:update(0, @self)
@@ -341,7 +352,7 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 	end
 
 	--NOTE: can't overload insert() because T can be an arr.
-	arr.methods.insert_array = terralib.overloadedfunction('insert_array', {})
+	arr.methods.insert_array = overload('insert_array', {})
 	arr.methods.insert_array:adddefinition(terra(self: &arr, i: size_t, p: &T, len: size_t)
 		return self:insert_junk(i, len) and self:update(i, p, len)
 	end)
@@ -354,39 +365,52 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 
 	--comparing values and arrays
 
-	local user_cmp_asc = cmp_asc
-	if not user_cmp_asc then
+	view.methods.compare = overload'compare'
+	arr .methods.compare = overload'compare'
+	local user_cmp = cmp
+	if not user_cmp then
 		if not T:isaggregate() then
-			cmp_asc = terra(a: &T, b: &T): int32
+			cmp = terra(a: &T, b: &T): int32
 				return iif(@a < @b, -1, iif(@a > @b, 1, 0))
 			end
 		elseif T.methods.compare then
-			local cmp_asc = terra(a: &T, b: &T)
+			cmp = terra(a: &T, b: &T)
 				return a:compare(b)
 			end
 		end
-		terra arr:compare(a: &arr) --NOTE: assuming normalized representation!
-			if a.len ~= self.len then
-				return iif(self.len < a.len, -1, 1)
+		--faster comparison but assumes values have normalized representation!
+		view.methods.compare:adddefinition(terra(self: &view, v: view)
+			if v.len ~= self.len then
+				return iif(self.len < v.len, -1, 1)
 			end
-			return memcmp(self.elements, a.elements, sizeof(T) * self.len)
-		end
+			return memcmp(self.elements, v.elements, sizeof(T) * self.len)
+		end)
 	else
-		terra arr:compare(a: &arr)
-			if a.len ~= self.len then
-				return iif(self.len < a.len, -1, 1)
+		--slower comparison based on cmp.
+		view.methods.compare:adddefinition(terra(self: &view, v: view)
+			if v.len ~= self.len then
+				return iif(self.len < v.len, -1, 1)
 			end
-			for i,v in self do
-				var r = cmp_asc(&v, a(i))
+			for i,val in self do
+				var r = cmp(&val, v(i))
 				if r ~= 0 then
 					return r
 				end
 			end
 			return 0
-		end
+		end)
 	end
-	local cmp_desc = cmp_asc and terra(a: &T, b: &T): int32
-		return -cmp_asc(a, b)
+	arr.methods.compare:adddefinition(terra(self: &arr, v: view)
+		return self:view(0, self.len):compare(v)
+	end)
+	view.methods.compare:adddefinition(terra(self: &view, a: &arr)
+		return self:compare(a:view(0, a.len))
+	end)
+	arr.methods.compare:adddefinition(terra(self: &arr, a: &arr)
+		return self:compare(a:view(0, a.len))
+	end)
+	local cmp_desc = cmp and terra(a: &T, b: &T): int32
+		return -cmp(a, b)
 	end
 
 	terra arr:equals(a: &arr)
@@ -395,8 +419,8 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 
 	--sorting
 
-	view.methods.sort = terralib.overloadedfunction('sort', {})
-	arr .methods.sort = terralib.overloadedfunction('sort', {})
+	view.methods.sort = overload('sort', {})
+	arr .methods.sort = overload('sort', {})
 	view.methods.sort:adddefinition(terra(self: &view, cmp: {&T, &T} -> int32)
 		qsort(self.elements, self.len, sizeof(T),
 			[{&opaque, &opaque} -> int32](cmp))
@@ -405,9 +429,9 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 	arr.methods.sort:adddefinition(terra(self: &arr, cmp: {&T, &T} -> int32)
 		return self:view(0, self.len):sort(cmp)
 	end)
-	if cmp_asc then
-		view.methods.sort:adddefinition(terra(self: &view) return self:sort(cmp_asc) end)
-		arr .methods.sort:adddefinition(terra(self: &arr ) return self:sort(cmp_asc) end)
+	if cmp then
+		view.methods.sort:adddefinition(terra(self: &view) return self:sort(cmp) end)
+		arr .methods.sort:adddefinition(terra(self: &arr ) return self:sort(cmp) end)
 		terra view:sort_desc() return self:sort(cmp_desc) end
 		terra arr :sort_desc() return self:sort(cmp_desc) end
 	end
@@ -415,8 +439,8 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 	--searching
 
 	local equal =
-		user_cmp_asc
-			and macro(function(a, b) return `cmp_asc(&a, &b) == 0 end)
+		user_cmp
+			and macro(function(a, b) return `cmp(&a, &b) == 0 end)
 		or not T:isaggregate()
 			and macro(function(a, b) return `a == b end)
 
@@ -450,11 +474,11 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 	--binary search for an insert position that keeps the array sorted.
 
 	local lt, gt, lte, gte
-	if user_cmp_asc then
-		lt  = terra(a: &T, b: &T) return cmp_asc(a, b) == -1 end
-		gt  = terra(a: &T, b: &T) return cmp_asc(a, b) ==  1 end
-		lte = terra(a: &T, b: &T) var r = cmp_asc(a, b) return r == -1 or r == 0 end
-		gte = terra(a: &T, b: &T) var r = cmp_asc(a, b) return r ==  1 or r == 0 end
+	if user_cmp then
+		lt  = terra(a: &T, b: &T) return cmp(a, b) == -1 end
+		gt  = terra(a: &T, b: &T) return cmp(a, b) ==  1 end
+		lte = terra(a: &T, b: &T) var r = cmp(a, b) return r == -1 or r == 0 end
+		gte = terra(a: &T, b: &T) var r = cmp(a, b) return r ==  1 or r == 0 end
 	elseif not T:isaggregate() then
 		lt  = terra(a: &T, b: &T) return @a <  @b end
 		gt  = terra(a: &T, b: &T) return @a >  @b end
@@ -468,8 +492,8 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 		props.gte = macro(function() return gte end)
 	end
 
-	view.methods.binsearch = terralib.overloadedfunction('binsearch', {})
-	arr .methods.binsearch = terralib.overloadedfunction('binsearch', {})
+	view.methods.binsearch = overload('binsearch', {})
+	arr .methods.binsearch = overload('binsearch', {})
 	view.methods.binsearch:adddefinition(
 	terra(self: &view, v: T, cmp: {&T, &T} -> bool): size_t
 		var lo = [size_t](0)
@@ -542,30 +566,30 @@ local function arr_type(T, cmp_asc, size_t, growth_factor, C)
 end
 arr_type = terralib.memoize(arr_type)
 
-local arr_type = function(T, cmp_asc, size_t, growth_factor, C)
+local arr_type = function(T, cmp, size_t, growth_factor, C)
 	T = T or int32
 	size_t = size_t or int32
 	growth_factor = growth_factor or 2
 	C = C or require'low'
-	return arr_type(T, cmp_asc, size_t, growth_factor, C)
+	return arr_type(T, cmp, size_t, growth_factor, C)
 end
 
 local arr = macro(
 	--calling it from Terra returns a new array.
 	function(arg1, ...)
-		local T, lval, size, cmp_asc, size_t, growth_factor
+		local T, lval, len, cmp, size_t, growth_factor
 		if arg1 and arg1:islvalue() then --wrap raw pointer: arr(&v, len, ...)
-			lval, len, cmp_asc, size_t, growth_factor = arg1, ...
+			lval, len, cmp, size_t, growth_factor = arg1, ...
 			T = lval:gettype()
 			assert(T:ispointer())
 			T = T.type
 		else --create new array: arr(T, ...)
-			T, cmp_asc, size_t, growth_factor = arg1, ...
+			T, cmp, size_t, growth_factor = arg1, ...
 			T = T and T:astype()
 		end
 		size_t = size_t and size_t:astype()
 		growth_factor = growth_factor and growth_factor:asvalue()
-		local arr = arr_type(T, cmp_asc, size_t, growth_factor)
+		local arr = arr_type(T, cmp, size_t, growth_factor)
 		if lval then
 			return quote
 				var a = arr(nil)
