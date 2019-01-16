@@ -3,7 +3,7 @@
 --Written by Cosmin Apreutesei. Public domain.
 
 --stdlib deps: realloc, memset, memmove, memcmp, qsort, strnlen.
---macro deps: iif, min, max, maxint, assert, binsearch, addproperties.
+--macro deps: iif, min, max, assert, binsearch, addproperties.
 
 --[[  API
 
@@ -22,12 +22,13 @@
 	a|view:view(i, j) -> view
 
 	a|view:set(i, v) -> ok?
-	a|view:byref(i) -> &v|nil
+	a|view:at(i) -> &v|nil
 	a|view:get(i) -> v
 	a|view(i) -> &v
 	for i, &v in a|view do ... end
-	a:push(v) -> ok?
-	a:add(v) -> ok?
+	a:push(v) -> i|-1
+	a:push() -> &v|nil
+	a:add(v) -> i|-1
 	a:insert(i, v) -> ok?
 	a:pop() -> v
 
@@ -93,7 +94,7 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 		if T == int8 and from == rawstring then
 			--initialize with a null-terminated string
 			return quote
-				var len = strnlen(exp, maxint(size_t)-1)+1
+				var len = strnlen(exp, [size_t:max()]-1)+1
 				var self = arr(nil)
 				if self:resize(len) then
 					memmove(self.elements, exp, len)
@@ -117,7 +118,7 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 			size = max(size, self.size * growth_factor)
 		end
 		var p = iif(self.p ~= &empty, self.p, nil)
-		p = [&P](realloc(p, sizeof(P) + sizeof(T) * (size - 1)))
+		p = [&P](realloc(p, sizeof(P) + sizeof(T) * size))
 		if p == nil then return false end
 		self.p = p
 		self.size = size
@@ -138,7 +139,7 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 
 	--random access with auto-growing
 
-	terra arr:byref(i: size_t): &T
+	terra arr:at(i: size_t): &T
 		if i < 0 then i = self.len - i end
 		return iif(i >= 0 and i < self.len, &self.elements[i], nil)
 	end
@@ -185,8 +186,17 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 
 	--stack interface
 
-	terra arr:push(val: T) return self:set(self.len, val) end
-	terra arr:add (val: T) return self:set(self.len, val) end
+	arr.methods.push = overload('push', {})
+	arr.methods.push:adddefinition(terra(self: &arr, val: T)
+		var i = self.len
+		return iif(self:set(i, val), i, -1)
+	end)
+	arr.methods.push:adddefinition(terra(self: &arr)
+		var i = self.len
+		if not self:grow(i) then return nil end
+		return &self.elements[i]
+	end)
+	arr.methods.add = arr.methods.push
 
 	terra arr:pop()
 		var v = self(-1)
@@ -264,8 +274,8 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 		return `&self.array.elements[self.start]
 	end)
 
-	terra view:byref(i: size_t): &T
-		return self.array:byref(self.start + i)
+	terra view:at(i: size_t): &T
+		return self.array:at(self.start + i)
 	end
 
 	terra view:get(i: size_t): T
@@ -567,6 +577,10 @@ end
 arr_type = terralib.memoize(arr_type)
 
 local arr_type = function(T, cmp, size_t, growth_factor, C)
+	if terralib.type(T) == 'table' then
+		T, cmp, size_t, growth_factor, C =
+			T.T, T.cmp, T.size_t, T.growth_factor, T.C
+	end
 	T = T or int32
 	size_t = size_t or int32
 	growth_factor = growth_factor or 2
