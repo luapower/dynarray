@@ -3,32 +3,33 @@
 --Written by Cosmin Apreutesei. Public domain.
 
 --stdlib deps: realloc, memset, memmove, memcmp, qsort, strnlen.
---macro deps: iif, min, max, assert, binsearch, addproperties.
+--macro deps: iif, min, max, assert, noop, binsearch, addproperties.
 
 --[[  API
 
-	local A = arr(T=int32, cmp=f(&a<&b), size_t=int32, grow_factor=2, C=require'low')
-	var a = arr(T=int32, cmp=f(a<b), size_t=int32, grow_factor=2)
-	var a = arr(&buffer, len, cmp=f(a<b), size_t=int32, grow_factor=2)
+	local A = arr{T=int, cmp=f(&a<&b), size_t=int32, grow_factor=2, C=require'low'}
+	var a = arr(...) --preferred variant
+	var a = arr(&buffer, len, cmp=...)
 	var a: A = nil -- =nil is imortant!
 	var a = A(nil) -- (nil) is important!
 	a:free()
 	a:clear()
 	a:shrink()
-	a:resize(min_size)
+	a:resize(size) -> ok?
+	a:preallocate(size) -> ok?
+	a.size
 	a.len
 
 	a|view:range(i, j, truncate?) -> start, len
 	a|view:view(i, j) -> view
 
+	a:ensure(i) -> ok?
 	a|view:set(i, v) -> ok?
 	a|view:at(i) -> &v|nil
-	a|view:get(i) -> v
-	a|view(i) -> &v
-	for i, &v in a|view do ... end
-	a:push(v) -> i|-1
-	a:push() -> &v|nil
-	a:add(v) -> i|-1
+	a|view[:get](i[,default]) -> v
+	for i,&v in a|view[:backwards()] do ... end
+	a:push|add(v) -> i|-1
+	a:push|add() -> &v|nil
 	a:insert(i, v) -> ok?
 	a:pop() -> v
 
@@ -63,8 +64,8 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 	setfenv(1, C)
 
 	local struct P {
-		size: size_t;
-		len: size_t;
+		size: size_t; --capacity
+		len: size_t;  --number of valid elements
 	}
 
 	local empty = constant(`P{size=0, len=0}) --static park space when empty
@@ -117,13 +118,17 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 		if size > self.size then --grow
 			size = max(size, self.size * growth_factor)
 		end
-		var p = iif(self.p ~= &empty, self.p, nil)
-		p = [&P](realloc(p, sizeof(P) + sizeof(T) * size))
-		if p == nil then return false end
-		self.p = p
+		var p0 = iif(self.p ~= &empty, self.p, nil)
+		var p1 = [&P](realloc(p0, sizeof(P) + sizeof(T) * size))
+		if p1 == nil then return false end
+		self.p = p1
 		self.size = size
 		self.len = min(size, len)
 		return true
+	end
+
+	terra arr:preallocate(size: size_t): bool
+		return iif(size > self.size, self:resize(size), true)
 	end
 
 	terra arr:free()
@@ -140,18 +145,23 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 	--random access with auto-growing
 
 	terra arr:at(i: size_t): &T
-		if i < 0 then i = self.len - i end
+		if i < 0 then i = self.len + i end
 		return iif(i >= 0 and i < self.len, &self.elements[i], nil)
 	end
 
-	terra arr:get(i: size_t): T
-		if i < 0 then i = self.len - i end
+	arr.methods.get = overload('get', {})
+	arr.methods.get:adddefinition(terra(self: &arr, i: size_t): T
+		if i < 0 then i = self.len + i end
 		assert(i >= 0 and i < self.len)
 		return self.elements[i]
-	end
+	end)
+	arr.methods.get:adddefinition(terra(self: &arr, i: size_t, default: T): T
+		if i < 0 then i = self.len + i end
+		return iif(i >= 0 and i < self.len, self.elements[i], default)
+	end)
 	arr.metamethods.__apply = arr.methods.get
 
-	terra arr:grow(i: size_t): bool
+	terra arr:ensure(i: size_t): bool
 		assert(i >= 0)
 		if i >= self.size then --grow size
 			if not self:resize(i+1) then
@@ -168,8 +178,8 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 	end
 
 	terra arr:set(i: size_t, val: T): bool
-		if i < 0 then i = self.len - i end
-		if not self:grow(i) then return false end
+		if i < 0 then i = self.len + i end
+		if not self:ensure(i) then return false end
 		self.elements[i] = val
 		return true
 	end
@@ -184,6 +194,18 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 		end
 	end
 
+	local struct reverse_iter { array: arr; }
+	reverse_iter.metamethods.__for = function(self, body)
+		return quote
+			for i = self.array.len-1, -1, -1 do
+				[ body(`i, `&self.array.elements[i]) ]
+			end
+		end
+	end
+	terra arr:backwards()
+		return reverse_iter {@self}
+	end
+
 	--stack interface
 
 	arr.methods.push = overload('push', {})
@@ -191,9 +213,9 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 		var i = self.len
 		return iif(self:set(i, val), i, -1)
 	end)
-	arr.methods.push:adddefinition(terra(self: &arr)
+	arr.methods.push:adddefinition(terra(self: &arr): &T
 		var i = self.len
-		if not self:grow(i) then return nil end
+		if not self:ensure(i) then return nil end
 		return &self.elements[i]
 	end)
 	arr.methods.add = arr.methods.push
@@ -207,7 +229,7 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 	--segment shifting
 
 	terra arr:insert_junk(i: size_t, n: size_t)
-		if i < 0 then i = self.len - i end
+		if i < 0 then i = self.len + i end
 		assert(i >= 0 and n >= 0)
 		var b = max(0, self.len-i) --how many bytes must be moved
 		if not self:resize(max(self.size, i+n+b)) then return false end
@@ -219,7 +241,7 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 	arr.methods.remove = overload('remove', {})
 
 	arr.methods.remove:adddefinition(terra(self: &arr, i: size_t, n: size_t)
-		if i < 0 then i = self.len - i end
+		if i < 0 then i = self.len + i end
 		assert(i >= 0 and n >= 0)
 		var b = self.len-i-n --how many elements must be moved
 		if b > 0 then
@@ -248,8 +270,8 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 
 	--NOTE: j is not the last position, but one position after that!
 	terra view:range(i: size_t, j: size_t, truncate: bool)
-		if i < 0 then i = self.len - i end
-		if j < 0 then j = self.len - j end
+		if i < 0 then i = self.len + i end
+		if j < 0 then j = self.len + j end
 		assert(i >= 0)
 		j = max(i, j)
 		if truncate then j = min(self.len, j) end
@@ -284,7 +306,7 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 	view.metamethods.__apply = view.methods.get
 
 	terra view:set(i: size_t, val: T): bool
-		if i < 0 then i = self.len - i end
+		if i < 0 then i = self.len + i end
 		assert(i >= 0 and i < self.len)
 		return self.array:set(self.start + i, val)
 	end
@@ -295,6 +317,18 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 				[ body(`i, `&self.elements[i]) ]
 			end
 		end
+	end
+
+	local struct reverse_iter { view: view; }
+	reverse_iter.metamethods.__for = function(self, body)
+		return quote
+			for i = self.view.len-1, -1, -1 do
+				[ body(`i, `&self.view.elements[i]) ]
+			end
+		end
+	end
+	terra view:backwards()
+		return reverse_iter {@self}
 	end
 
 	view.methods.copy = overload('copy', {})
@@ -315,7 +349,7 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 
 	arr.methods.update = overload('update', {})
 	arr.methods.update:adddefinition(terra(self: &arr, i: size_t, p: &T, len: size_t)
-		if i < 0 then i = self.len - i end; assert(i >= 0)
+		if i < 0 then i = self.len + i end; assert(i >= 0)
 		if len == 0 then return true end
 		var newlen = max(self.len, i+len)
 		if newlen > self.len then
@@ -581,7 +615,7 @@ local arr_type = function(T, cmp, size_t, growth_factor, C)
 		T, cmp, size_t, growth_factor, C =
 			T.T, T.cmp, T.size_t, T.growth_factor, T.C
 	end
-	T = T or int32
+	T = T or int
 	size_t = size_t or int32
 	growth_factor = growth_factor or 2
 	C = C or require'low'
