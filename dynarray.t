@@ -620,6 +620,10 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 	end)
 	arr.methods.call = view.methods.call
 
+	terra arr:__size() --for putting in a cache
+		return sizeof(arr) + sizeof(P) + sizeof(T) * self.size
+	end
+
 	return arr
 end
 arr_type = terralib.memoize(arr_type)
