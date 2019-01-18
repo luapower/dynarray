@@ -80,6 +80,22 @@ local terra test_wrap()
 	a:free()
 end
 
+local terra test_hashmap()
+	var s1 = S'Hello'
+	var s2 = S'World!'
+	var h = map(S, int)
+	h:put(s1, 5)
+	h:put(s2, 7)
+	h:put(s2, 8)
+	h:put(s1, 3)
+	print(@h:at(s2), @h:at(s1), h.count)
+	s1:free()
+	s2:free()
+	h:free()
+end
+
+
 test_dynarray()
 test_arrayofstrings()
 test_wrap()
+test_hashmap()

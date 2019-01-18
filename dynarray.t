@@ -7,8 +7,9 @@
 
 --[[  API
 
-	local A = arr{T=int, cmp=f(&a<&b), size_t=int32, grow_factor=2, C=require'low'}
-	var a = arr(...) --preferred variant
+	local A = arr{T=int, cmp=T.__cmp|default, size_t=int32, grow_factor=2,
+		C=require'low'}
+	var a = arr(T=int, ...) --preferred variant
 	var a = arr(&buffer, len, cmp=...)
 	var a: A = nil -- =nil is imortant!
 	var a = A(nil) -- (nil) is important!
@@ -47,8 +48,6 @@
 	a|view:binsearch(v, cmp: {&T, &T} -> bool) -> i
 	a|view:binsearch(v, a.lt|a.lte|a.gt|a.gte) -> i
 	a|view:binsearch_macro(v, cmp(t, i, v) -> bool) -> i
-	a|view:compare(b) -> -1|0|1
-	a|view:equals(b) -> ?
 
 	a|view:reverse()
 	a|view:call(method, args...)
@@ -409,56 +408,72 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 
 	--comparing values and arrays
 
-	view.methods.compare = overload'compare'
-	arr .methods.compare = overload'compare'
-	local user_cmp = cmp
-	if not user_cmp then
-		if not T:isaggregate() then
-			cmp = terra(a: &T, b: &T): int32
-				return iif(@a < @b, -1, iif(@a > @b, 1, 0))
-			end
-		elseif T.methods.compare then
-			cmp = terra(a: &T, b: &T)
-				return a:compare(b)
+	local equal
+
+	--1. using custom comparison function
+	cmp = cmp or T:isaggregate() and T.methods.__cmp
+
+	--2. elements are comparable
+	local custom_op = not cmp and T:isaggregate()
+		and T.metamethods.__eq and T.metamethods.__lt
+
+	if not cmp and (custom_op or not T:isaggregate()) then
+
+		cmp = terra(a: &T, b: &T): int32 --for sorting this view
+			return iif(@a == @b, 0, iif(@a < @b, -1, 1))
+		end
+
+		equal = macro(function(a, b) return `@a == @b end)
+
+		if not custom_op then --can be mem-compared directly
+			terra view:__cmp(v: &view) --for sorting views like this
+				if v.len ~= self.len then
+					return iif(self.len < v.len, -1, 1)
+				end
+				return memcmp(self.elements, v.elements, sizeof(T) * self.len)
 			end
 		end
-		--faster comparison but assumes values have normalized representation!
-		view.methods.compare:adddefinition(terra(self: &view, v: view)
-			if v.len ~= self.len then
-				return iif(self.len < v.len, -1, 1)
-			end
-			return memcmp(self.elements, v.elements, sizeof(T) * self.len)
-		end)
-	else
+	end
+
+	if cmp and not view.methods.__cmp then
 		--slower comparison based on cmp.
-		view.methods.compare:adddefinition(terra(self: &view, v: view)
+		terra view:__cmp(v: &view)
 			if v.len ~= self.len then
 				return iif(self.len < v.len, -1, 1)
 			end
 			for i,val in self do
-				var r = cmp(&val, v(i))
+				var r = cmp(val, v:at(i))
 				if r ~= 0 then
 					return r
 				end
 			end
 			return 0
-		end)
-	end
-	arr.methods.compare:adddefinition(terra(self: &arr, v: view)
-		return self:view(0, self.len):compare(v)
-	end)
-	view.methods.compare:adddefinition(terra(self: &view, a: &arr)
-		return self:compare(a:view(0, a.len))
-	end)
-	arr.methods.compare:adddefinition(terra(self: &arr, a: &arr)
-		return self:compare(a:view(0, a.len))
-	end)
-	local cmp_desc = cmp and terra(a: &T, b: &T): int32
-		return -cmp(a, b)
+		end
 	end
 
-	terra arr:equals(a: &arr)
-		return self:compare(a) == 0
+	if not equal and cmp then
+		equal = macro(function(a, b) return `cmp(a, b) == 0 end)
+	end
+
+	if cmp then
+		terra view:__equal(v: &view)
+			return self:__cmp(v) == 0
+		end
+		terra arr:__cmp(a: &arr)
+			var v = a:view(0, a.len)
+			return self:view(0, self.len):__cmp(&v)
+		end
+		terra arr:__equal(a: &arr)
+			var v = a:view(0, a.len)
+			return self:view(0, self.len):__equal(&v)
+		end
+	end
+
+	if C.hash then
+		terra view:__hash32(): uint32 return C.hash(uint32, self, sizeof(T)) end
+		terra view:__hash64(): uint64 return C.hash(uint64, self, sizeof(T)) end
+		terra arr:__hash32(): uint32 return self:view(0, self.len):__hash32() end
+		terra arr:__hash64(): uint32 return self:view(0, self.len):__hash64() end
 	end
 
 	--sorting
@@ -473,25 +488,24 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 	arr.methods.sort:adddefinition(terra(self: &arr, cmp: {&T, &T} -> int32)
 		return self:view(0, self.len):sort(cmp)
 	end)
+
 	if cmp then
 		view.methods.sort:adddefinition(terra(self: &view) return self:sort(cmp) end)
 		arr .methods.sort:adddefinition(terra(self: &arr ) return self:sort(cmp) end)
+
+		local terra cmp_desc(a: &T, b: &T): int32
+			return -cmp(a, b)
+		end
 		terra view:sort_desc() return self:sort(cmp_desc) end
 		terra arr :sort_desc() return self:sort(cmp_desc) end
 	end
 
 	--searching
 
-	local equal =
-		user_cmp
-			and macro(function(a, b) return `cmp(&a, &b) == 0 end)
-		or not T:isaggregate()
-			and macro(function(a, b) return `a == b end)
-
 	if equal then
 		terra view:find(val: T)
 			for i,v in self do
-				if equal(@v, val) then
+				if equal(v, &val) then
 					return i
 				end
 			end
@@ -504,7 +518,7 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 		terra view:count(val: T)
 			var n: size_t = 0
 			for i,v in self do
-				if equal(@v, val) then
+				if equal(v, &val) then
 					n = n + 1
 				end
 			end
@@ -616,6 +630,7 @@ local arr_type = function(T, cmp, size_t, growth_factor, C)
 			T.T, T.cmp, T.size_t, T.growth_factor, T.C
 	end
 	T = T or int
+	cmp = cmp or (T:isstruct() and T.methods.__cmp)
 	size_t = size_t or int32
 	growth_factor = growth_factor or 2
 	C = C or require'low'
