@@ -7,17 +7,17 @@
 
 --[[  API
 
-	local A = arr{T=int, cmp=T.__cmp|default, size_t=int32, grow_factor=2,
+	local A = arr{T=, cmp=T.__cmp|default, size_t=int32, grow_factor=2,
 		C=require'low'}
-	var a = arr(T=int, ...) --preferred variant
+	var a = arr(T, ...) --preferred variant
 	var a = arr(&buffer, len, cmp=...)
 	var a: A = nil -- =nil is imortant!
 	var a = A(nil) -- (nil) is important!
 	a:free()
 	a:clear()
-	a:shrink()
-	a:resize(size) -> ok?
+	a:shrink() -> ok?
 	a:preallocate(size) -> ok?
+	a:resize(size) -> ok?
 	a.size
 	a.len
 
@@ -63,7 +63,7 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 	setfenv(1, C)
 
 	local struct P {
-		size: size_t; --capacity
+		size: size_t; --capacity (as number of elements)
 		len: size_t;  --number of valid elements
 	}
 
@@ -139,6 +139,10 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 	terra arr:shrink(): bool
 		if self.size == self.len then return true end
 		return self:resize(self.len)
+	end
+
+	terra arr:__memsize(): size_t
+		return sizeof(arr) + sizeof(P) + sizeof(T) * self.size
 	end
 
 	--random access with auto-growing
@@ -620,10 +624,6 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 	end)
 	arr.methods.call = view.methods.call
 
-	terra arr:__size() --for putting in a cache
-		return sizeof(arr) + sizeof(P) + sizeof(T) * self.size
-	end
-
 	return arr
 end
 arr_type = terralib.memoize(arr_type)
@@ -633,7 +633,7 @@ local arr_type = function(T, cmp, size_t, growth_factor, C)
 		T, cmp, size_t, growth_factor, C =
 			T.T, T.cmp, T.size_t, T.growth_factor, T.C
 	end
-	T = T or int
+	assert(T)
 	cmp = cmp or (T:isstruct() and T.methods.__cmp)
 	size_t = size_t or int32
 	growth_factor = growth_factor or 2

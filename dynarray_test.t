@@ -2,7 +2,7 @@
 setfenv(1, require'low')
 
 local terra test_autogrow()
-	var a = arr()
+	var a = arr(int)
 	for i = 0,10000 do
 		a:set(i, i)
 	end
@@ -12,7 +12,7 @@ end
 test_autogrow()
 
 local terra test_stack()
-	var a = arr()
+	var a = arr(int)
 	for i = 0, 10000 do
 		assert(a:push(i) == i)
 	end
@@ -33,7 +33,7 @@ local cmp = terra(a: &int, b: &int): int32
 end
 
 local terra test_dynarray()
-	var a: arr{item_type = int, C = getfenv()} = nil
+	var a: arr{T = int, C = getfenv()} = nil
 	var a2 = arr(int)
 	var a3 = new([arr(int)])
 	a:set(15, 1234)
