@@ -72,7 +72,6 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 	local struct arr { p: &P } --opaque wrapper
 
 	function arr.metamethods.__typename(self)
-		local _ = _empty
 		return 'arr('..tostring(T)..')'
 	end
 
