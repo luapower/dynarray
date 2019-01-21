@@ -163,11 +163,11 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 	end)
 	arr.metamethods.__apply = arr.methods.get
 
-	terra arr:ensure(i: size_t): bool
+	terra arr:ensure(i: size_t): &T
 		assert(i >= 0)
 		if i >= self.size then --grow size
 			if not self:resize(i+1) then
-				return false
+				return nil
 			end
 		end
 		if i >= self.len then --enlarge
@@ -176,13 +176,14 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 			end
 			self.len = i + 1
 		end
-		return true
+		return &self.elements[i]
 	end
 
 	terra arr:set(i: size_t, val: T): bool
 		if i < 0 then i = self.len + i end
-		if not self:ensure(i) then return false end
-		self.elements[i] = val
+		var p = self:ensure(i)
+		if p == nil then return false end
+		@p = val
 		return true
 	end
 
@@ -216,9 +217,7 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 		return iif(self:set(i, val), i, -1)
 	end)
 	arr.methods.push:adddefinition(terra(self: &arr): &T
-		var i = self.len
-		if not self:ensure(i) then return nil end
-		return &self.elements[i]
+		return self:ensure(self.len)
 	end)
 	arr.methods.add = arr.methods.push
 
