@@ -30,7 +30,7 @@
 	a|view[:get](i[,default]) -> v
 	for i,&v in a|view[:backwards()] do ... end
 	a:push|add(v) -> i|-1
-	a:push|add() -> &v|nil
+	a:push_junk() -> &v|nil
 	a:insert(i, v) -> ok?
 	a:pop() -> v
 
@@ -220,6 +220,15 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 		return self:ensure(self.len)
 	end)
 	arr.methods.add = arr.methods.push
+
+	terra arr:push_junk()
+		var newlen = self.len + 1
+		if self.size < newlen then
+			if not self:resize(newlen) then return nil end
+		end
+		self.len = newlen
+		return &self.elements[newlen-1]
+	end
 
 	terra arr:pop()
 		var v = self(-1)
