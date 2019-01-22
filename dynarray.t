@@ -30,7 +30,7 @@
 	a|view[:get](i[,default]) -> v
 	for i,&v in a|view[:backwards()] do ... end
 	a:push|add(v) -> i|-1
-	a:push_junk() -> &v|nil
+	a:push_junk|add_junk() -> &v|nil
 	a:insert(i, v) -> ok?
 	a:pop() -> v
 
@@ -163,7 +163,7 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 	end)
 	arr.metamethods.__apply = arr.methods.get
 
-	terra arr:ensure(i: size_t): &T
+	local terra ensure(self: &arr, i: size_t, clear_i: size_t): &T
 		assert(i >= 0)
 		if i >= self.size then --grow size
 			if not self:resize(i+1) then
@@ -171,8 +171,8 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 			end
 		end
 		if i >= self.len then --enlarge
-			if i >= self.len + 1 then --clear the gap
-				memset(&self.elements[self.len], 0, sizeof(T) * (i - self.len))
+			if clear_i >= self.len + 1 then --clear the gap
+				memset(&self.elements[self.len], 0, sizeof(T) * (clear_i - self.len))
 			end
 			self.len = i + 1
 		end
@@ -181,7 +181,7 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 
 	terra arr:set(i: size_t, val: T): bool
 		if i < 0 then i = self.len + i end
-		var p = self:ensure(i)
+		var p = ensure(self, i, i-1)
 		if p == nil then return false end
 		@p = val
 		return true
@@ -217,18 +217,21 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 		return iif(self:set(i, val), i, -1)
 	end)
 	arr.methods.push:adddefinition(terra(self: &arr): &T
-		return self:ensure(self.len)
+		return ensure(self, self.len, self.len)
 	end)
 	arr.methods.add = arr.methods.push
 
 	terra arr:push_junk()
 		var newlen = self.len + 1
 		if self.size < newlen then
-			if not self:resize(newlen) then return nil end
+			if not self:resize(newlen) then
+				return nil
+			end
 		end
 		self.len = newlen
 		return &self.elements[newlen-1]
 	end
+	arr.methods.add_junk = arr.methods.push_junk
 
 	terra arr:pop()
 		var v = self(-1)
