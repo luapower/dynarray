@@ -24,7 +24,6 @@
 	a|view:range(i, j, truncate?) -> start, len
 	a|view:view(i, j) -> view
 
-	a:ensure(i) -> ok?
 	a|view:set(i, v) -> ok?
 	a|view:at(i) -> &v|nil
 	a|view[:get](i[,default]) -> v
@@ -52,6 +51,7 @@
 	a|view:reverse()
 	a|view:call(method, args...)
 
+	a:index(&v) -> i|nil
 ]]
 
 if not ... then require'dynarray_test'; return end
@@ -633,6 +633,23 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 		end
 	end)
 	arr.methods.call = view.methods.call
+
+	--pointer interface. NOTE: pointers are unstable between mutations.
+
+	terra arr:indexof(pv: &T)
+		var i = pv - self.elements
+		return iif(i >= 0 and i < self.len, i, -1)
+	end
+
+	terra arr:next(pv: &T)
+		var i = pv - self.elements
+		return iif(i >= 0 and i < self.len-1, self.elements + i + 1, nil)
+	end
+
+	terra arr:prev(pv: &T)
+		var i = pv - self.elements
+		return iif(i > 0 and i < self.len, self.elements + i - 1, nil)
+	end
 
 	return arr
 end
