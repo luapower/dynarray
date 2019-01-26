@@ -89,6 +89,10 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 
 	--storage
 
+	terra arr:init()
+		self.p = &empty
+	end
+
 	function arr.metamethods.__cast(from, to, exp)
 		if T == int8 and from == rawstring then
 			--initialize with a null-terminated string
@@ -101,8 +105,8 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 				end
 				in self
 			end
-		elseif from == niltype or from:isunit() then
-			return `arr {p = &empty}
+		elseif from == niltype then
+			return quote var a: arr; a:init() in a end
 		else
 			error'invalid cast'
 		end
@@ -141,7 +145,7 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 	end
 
 	terra arr:__memsize(): size_t
-		return sizeof(arr) + sizeof(P) + sizeof(T) * self.size
+		return sizeof(arr) + sizeof(P) + sizeof(T) * self.len
 	end
 
 	--random access with auto-growing
@@ -420,37 +424,35 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 		return self:insert_junk(i, v.len) and self:update(i, v)
 	end)
 
-	--comparing values and arrays
+	--comparing elements and arrays
 
-	local equal
-
-	--1. using custom comparison function
+	--1. using custom comparison function.
 	cmp = cmp or T:isaggregate() and T.methods.__cmp
 
-	--2. elements are comparable
+	--2. elements are comparable via metamethods,
 	local custom_op = not cmp and T:isaggregate()
 		and T.metamethods.__eq and T.metamethods.__lt
 
-	if not cmp and (custom_op or not T:isaggregate()) then
+	--3. elements are inherently comparable or comparable via metamethods.
+	if not cmp and (custom_op or T:isarithmetic() or T:ispointer()) then
 
 		cmp = terra(a: &T, b: &T): int32 --for sorting this view
 			return iif(@a == @b, 0, iif(@a < @b, -1, 1))
 		end
 
-		equal = macro(function(a, b) return `@a == @b end)
-
-		if not custom_op then --can be mem-compared directly
+		--4. uint8 arrays can even be mem-compared directly.
+		if not custom_op and T == uint8 then
 			terra view:__cmp(v: &view) --for sorting views like this
 				if v.len ~= self.len then
 					return iif(self.len < v.len, -1, 1)
 				end
-				return memcmp(self.elements, v.elements, sizeof(T) * self.len)
+				return memcmp(self.elements, v.elements, self.len)
 			end
 		end
 	end
 
+	--compare views based on cmp.
 	if cmp and not view.methods.__cmp then
-		--slower comparison based on cmp.
 		terra view:__cmp(v: &view)
 			if v.len ~= self.len then
 				return iif(self.len < v.len, -1, 1)
@@ -465,29 +467,57 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 		end
 	end
 
-	if not equal and cmp then
-		equal = macro(function(a, b) return `cmp(a, b) == 0 end)
-	end
-
-	if cmp then
-		terra view:__equal(v: &view)
-			return self:__cmp(v) == 0
-		end
+	if view.methods.__cmp then
 		terra arr:__cmp(a: &arr)
 			var v = a:view(0, a.len)
 			return self:view(0, self.len):__cmp(&v)
 		end
-		terra arr:__equal(a: &arr)
-			var v = a:view(0, a.len)
-			return self:view(0, self.len):__equal(&v)
+		terra view:__eq(v: &view)
+			return self:__cmp(v) == 0
 		end
 	end
 
+	--compare eleemnts and arrays for equality
+
+	if not view.methods.__eq then
+		local equal
+		if T:isfloat() then
+			--floats might not be normalized, compare them individually
+			terra view:__eq(v: &view)
+				if v.len ~= self.len then return false end
+				for i,val in self do
+					if @val ~= v.elements[i] then return false end
+				end
+				return true
+			end
+		else --use memcmp
+			terra view:__eq(v: &view)
+				if v.len ~= self.len then return false end
+				return memcmp(self.elements, v.elements, sizeof(T) * self.len) == 0
+			end
+		end
+	end
+
+	if view.methods.__eq then
+		terra arr:__eq(a: &arr)
+			var v = a:view(0, a.len)
+			return self:view(0, self.len):__eq(&v)
+		end
+	end
+
+	if view.methods.__eq then
+		view.metamethods.__eq = view.methods.__eq
+		arr .metamethods.__eq = arr .methods.__eq
+		local __ne = macro(function(self, other) return not self == other end)
+		view.metamethods.__ne = __ne
+		arr .metamethods.__ne = __ne
+	end
+
 	if C.hash then
-		terra view:__hash32(): uint32 return C.hash(uint32, self, sizeof(T)) end
-		terra view:__hash64(): uint64 return C.hash(uint64, self, sizeof(T)) end
-		terra arr:__hash32(): uint32 return self:view(0, self.len):__hash32() end
-		terra arr:__hash64(): uint32 return self:view(0, self.len):__hash64() end
+		view.methods.__hash32 = macro(function(self, d) return `C.hash(uint32, self.elements, self.len * sizeof(T), [d or 0]) end)
+		view.methods.__hash64 = macro(function(self, d) return `C.hash(uint64, self.elements, self.len * sizeof(T), [d or 0]) end)
+		arr .methods.__hash32 = macro(function(self, d) return `self:view(0, self.len):__hash32([d or 0]) end)
+		arr .methods.__hash64 = macro(function(self, d) return `self:view(0, self.len):__hash64([d or 0]) end)
 	end
 
 	--sorting
