@@ -33,7 +33,7 @@ local cmp = terra(a: &int, b: &int): int32
 end
 
 local terra test_dynarray()
-	var a: arr{T = int, C = getfenv()} = nil
+	var a: arr{T = int, C = getfenv()}; a:init()
 	var a2 = arr(int)
 	var a3 = new([arr(int)])
 	a:set(15, 1234)

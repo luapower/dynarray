@@ -1,11 +1,7 @@
+--[[
 
---Dynamic array type for Terra.
---Written by Cosmin Apreutesei. Public domain.
-
---stdlib deps: realloc, memset, memmove, memcmp, qsort, strnlen.
---macro deps: iif, min, max, assert, noop, binsearch, addproperties.
-
---[[  API
+	Dynamic array type for Terra.
+	Written by Cosmin Apreutesei. Public domain.
 
 	local A = arr{T=, cmp=T.__cmp|default, size_t=int32, grow_factor=2,
 		C=require'low'}
@@ -26,8 +22,10 @@
 
 	a|view:set(i, v) -> ok?
 	a|view:at(i) -> &v|nil
-	a|view[:get](i[,default]) -> v
+	a|view(i[,default]) -> v
 	for i,&v in a|view[:backwards()] do ... end
+
+	a|view:setlen(len) -> ok?
 	a:push|add(v) -> i|-1
 	a:push_junk|add_junk() -> &v|nil
 	a:insert(i, v) -> ok?
@@ -52,6 +50,7 @@
 	a|view:call(method, args...)
 
 	a:index(&v) -> i|nil
+
 ]]
 
 if not ... then require'dynarray_test'; return end
@@ -75,10 +74,11 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 		return 'arr('..tostring(T)..')'
 	end
 
-	function arr.metamethods.__tostring(self, format_arg, fmt, args, freelist)
-		add(fmt, '%s[%d]')
+	function arr.metamethods.__tostring(self, format_arg, fmt, args, freelist, indent)
+		add(fmt, '%s[%d]<%llx>')
 		add(args, tostring(T))
 		add(args, `self.len)
+		add(args, `self.elements)
 	end
 
 	local props = addproperties(arr)
@@ -98,15 +98,13 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 			--initialize with a null-terminated string
 			return quote
 				var len = strnlen(exp, [size_t:max()]-1)+1
-				var self = arr(nil)
+				var self: arr; self:init()
 				if self:resize(len) then
 					memmove(self.elements, exp, len)
 					self.len = len
 				end
 				in self
 			end
-		elseif from == niltype then
-			return quote var a: arr; a:init() in a end
 		else
 			error'invalid cast'
 		end
@@ -144,10 +142,6 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 		return self:resize(self.len)
 	end
 
-	terra arr:__memsize(): size_t
-		return sizeof(arr) + sizeof(P) + sizeof(T) * self.len
-	end
-
 	--random access with auto-growing
 
 	terra arr:at(i: size_t): &T
@@ -181,6 +175,10 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 			self.len = i + 1
 		end
 		return &self.elements[i]
+	end
+
+	terra arr:setlen(len: size_t): bool
+		return ensure(self, len-1, 0) ~= nil
 	end
 
 	terra arr:set(i: size_t, val: T): bool
@@ -272,6 +270,7 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 	end)
 
 	terra arr:clear()
+		if self.len == 0 then return end --can't write on &empty
 		self.len = 0
 	end
 
@@ -282,6 +281,8 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 		start: size_t;
 		len: size_t;
 	}
+
+	arr.view_type = view
 
 	local viewprops = addproperties(view)
 
@@ -361,6 +362,13 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 		memmove(dst.elements, self.elements, min(dst.len, self.len))
 		return dst
 	end)
+	view.methods.copy:adddefinition(terra(self: &view): arr
+		var dst: arr; dst:init()
+		if dst:preallocate(self.len) then
+			dst.len = self.len
+			return self:copy(dst)
+		end
+	end)
 
 	--array-to-view/array interface
 
@@ -399,7 +407,7 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 
 	arr.methods.copy = overload('copy', {})
 	arr.methods.copy:adddefinition(terra(self: &arr)
-		var a = arr(nil)
+		var a: arr; a:init()
 		a:update(0, @self)
 		return a
 	end)
@@ -518,6 +526,14 @@ local function arr_type(T, cmp, size_t, growth_factor, C)
 		view.methods.__hash64 = macro(function(self, d) return `C.hash(uint64, self.elements, self.len * sizeof(T), [d or 0]) end)
 		arr .methods.__hash32 = macro(function(self, d) return `self:view(0, self.len):__hash32([d or 0]) end)
 		arr .methods.__hash64 = macro(function(self, d) return `self:view(0, self.len):__hash64([d or 0]) end)
+	end
+
+	terra view:__memsize(): size_t
+		return sizeof(arr) + sizeof(P) + sizeof(T) * self.len + sizeof(view)
+	end
+
+	terra arr:__memsize(): size_t
+		return sizeof(arr) + sizeof(P) + sizeof(T) * self.len
 	end
 
 	--sorting
@@ -715,13 +731,9 @@ local arr = macro(
 		growth_factor = growth_factor and growth_factor:asvalue()
 		local arr = arr_type(T, cmp, size_t, growth_factor)
 		if lval then
-			return quote
-				var a = arr(nil)
-				a:update(0, lval, len)
-				in a
-			end
+			return quote var a: arr; a:init(); a:update(0, lval, len) in a end
 		else
-			return `arr(nil)
+			return quote var a: arr; a:init() in a end
 		end
 	end,
 	--calling it from Lua or from an escape or in a type declaration returns
