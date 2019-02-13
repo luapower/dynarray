@@ -12,9 +12,9 @@
 	a:free()
 	a:clear()
 	a:shrink() -> ok?
-	a:preallocate(size) -> ok?
-	a:resize(size) -> ok?
-	a.size
+	a:preallocate(capacity) -> ok?
+	a:resize(capacity) -> ok?
+	a.capacity
 	a.len
 
 	a|view:range(i, j, truncate?) -> start, len
@@ -62,11 +62,11 @@ local function arr_type(T, cmp, size_t, C)
 	setfenv(1, C)
 
 	local struct P {
-		size: size_t; --capacity (as number of elements)
-		len: size_t;  --number of valid elements
+		capacity: size_t;
+		len: size_t;
 	}
 
-	local empty = constant(`P{size=0, len=0}) --static park space when empty
+	local empty = constant(`P{capacity=0, len=0}) --static park space when empty
 
 	local struct arr { p: &P } --opaque wrapper
 
@@ -74,42 +74,44 @@ local function arr_type(T, cmp, size_t, C)
 		return 'arr('..tostring(T)..')'
 	end
 
-	function arr.metamethods:__staticinitialize()
-
-		function arr.metamethods.__tostring(self, format_arg, fmt, args, freelist, indent)
-			add(fmt, '%s[%d]<%llx>')
-			add(args, tostring(T))
-			add(args, `self.len)
-			add(args, `self.elements)
+	function arr.metamethods.__cast(from, to, exp)
+		if T == int8 and from == rawstring then
+			--initialize with a null-terminated string
+			return quote
+				var len = strnlen(exp, [size_t:max()]-1)+1
+				var self: arr; self:init()
+				if self:resize(len) then
+					memmove(self.elements, exp, len)
+					self.len = len
+				end
+				in self
+			end
+		else
+			error'invalid cast'
 		end
+	end
 
-		local props = addproperties(arr)
+	function arr.metamethods.__tostring(self, format_arg, fmt, args, freelist, indent)
+		add(fmt, '%s[%d]<%llx>')
+		add(args, tostring(T))
+		add(args, `self.len)
+		add(args, `self.elements)
+	end
 
-		props.len = macro(function(self) return `self.p.len end)
-		props.size = macro(function(self) return `self.p.size end)
-		props.elements = macro(function(self) return `[&T](self.p+1) end)
+	local props = addproperties(arr)
+
+	props.len = macro(function(self) return `self.p.len end)
+	props.capacity = macro(function(self) return `self.p.capacity end)
+	props.elements = macro(function(self) return `[&T](self.p+1) end)
+
+	local added
+	local function addmethods()
+		if added then return end; added = true
 
 		--storage
 
 		terra arr:init()
 			self.p = &empty
-		end
-
-		function arr.metamethods.__cast(from, to, exp)
-			if T == int8 and from == rawstring then
-				--initialize with a null-terminated string
-				return quote
-					var len = strnlen(exp, [size_t:max()]-1)+1
-					var self: arr; self:init()
-					if self:resize(len) then
-						memmove(self.elements, exp, len)
-						self.len = len
-					end
-					in self
-				end
-			else
-				error'invalid cast'
-			end
 		end
 
 		terra arr:free()
@@ -119,32 +121,32 @@ local function arr_type(T, cmp, size_t, C)
 		end
 
 		arr.methods.resize = overload'resize'
-		arr.methods.resize:adddefinition(terra(self: &arr, size: size_t, growth_factor: int): bool
-			assert(size >= 0)
-			if size == self.size then return true end
-			if size == 0 then self:free(); return true end
+		arr.methods.resize:adddefinition(terra(self: &arr, capacity: size_t, growth_factor: int): bool
+			assert(capacity >= 0)
+			if capacity == self.capacity then return true end
+			if capacity == 0 then self:free(); return true end
 			var len = self.len
-			if size > self.size then --grow
-				size = max(size, self.size * growth_factor)
+			if capacity > self.capacity then --grow
+				capacity = max(capacity, self.capacity * growth_factor)
 			end
 			var p0 = iif(self.p ~= &empty, self.p, nil)
-			var p1 = [&P](realloc(p0, sizeof(P) + sizeof(T) * size))
+			var p1 = [&P](realloc(p0, sizeof(P) + sizeof(T) * capacity))
 			if p1 == nil then return false end
 			self.p = p1
-			self.size = size
-			self.len = min(size, len)
+			self.capacity = capacity
+			self.len = min(capacity, len)
 			return true
 		end)
-		arr.methods.resize:adddefinition(terra(self: &arr, size: size_t): bool
-			return self:resize(size, 2)
+		arr.methods.resize:adddefinition(terra(self: &arr, capacity: size_t): bool
+			return self:resize(capacity, 2)
 		end)
 
-		terra arr:preallocate(size: size_t): bool
-			return iif(size > self.size, self:resize(size), true)
+		terra arr:preallocate(capacity: size_t): bool
+			return iif(capacity > self.capacity, self:resize(capacity), true)
 		end
 
 		terra arr:shrink(): bool
-			if self.size == self.len then return true end
+			if self.capacity == self.len then return true end
 			return self:resize(self.len)
 		end
 
@@ -169,7 +171,7 @@ local function arr_type(T, cmp, size_t, C)
 
 		local terra ensure(self: &arr, i: size_t, clear_i: size_t): &T
 			assert(i >= 0)
-			if i >= self.size then --grow size
+			if i >= self.capacity then --grow size
 				if not self:resize(i+1) then
 					return nil
 				end
@@ -231,7 +233,7 @@ local function arr_type(T, cmp, size_t, C)
 
 		terra arr:push_junk()
 			var newlen = self.len + 1
-			if self.size < newlen then
+			if self.capacity < newlen then
 				if not self:resize(newlen) then
 					return nil
 				end
@@ -253,7 +255,7 @@ local function arr_type(T, cmp, size_t, C)
 			if i < 0 then i = self.len + i end
 			assert(i >= 0 and n >= 0)
 			var b = max(0, self.len-i) --how many bytes must be moved
-			if not self:resize(max(self.size, i+n+b)) then return false end
+			if not self:resize(max(self.capacity, i+n+b)) then return false end
 			if b <= 0 then return true end
 			memmove(&self.elements[i+n], &self.elements[i], sizeof(T) * b)
 			return true
@@ -703,7 +705,21 @@ local function arr_type(T, cmp, size_t, C)
 			return iif(i > 0 and i < self.len, self.elements + i - 1, nil)
 		end
 
-	end --__staticinitialize
+	end --addmethods()
+
+	function arr.metamethods.__getmethod(self, name)
+		addmethods()
+		self.metamethods.__getmethod = nil
+		return self.methods[name]
+	end
+
+	--in case meta-code looks for the presence of a method...
+	local mt = {}; setmetatable(arr.methods, mt)
+	function mt:__index(name)
+		addmethods()
+		mt.__index = nil
+		return self[name]
+	end
 
 	return arr
 end

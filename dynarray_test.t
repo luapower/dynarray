@@ -7,7 +7,7 @@ local terra test_autogrow()
 		a:set(i, i)
 	end
 	assert(a.len == 10000)
-	assert(a.size == 16384)
+	assert(a.capacity == 16384)
 end
 test_autogrow()
 
@@ -20,9 +20,9 @@ local terra test_stack()
 		assert(a:pop() == i)
 	end
 	assert(a.len == 0)
-	assert(a.size > 0)
+	assert(a.capacity > 0)
 	a:shrink()
-	assert(a.size == 0)
+	assert(a.capacity == 0)
 end
 test_stack()
 
@@ -37,7 +37,7 @@ local terra test_dynarray()
 	var a2 = arr(int)
 	var a3 = new([arr(int)])
 	a:set(15, 1234)
-	print(a.size, a.len, a(15))
+	print(a.capacity, a.len, a(15))
 	a:set(19, 4321)
 	assert(a(19) == 4321)
 	var x = -1
@@ -61,10 +61,10 @@ local terra test_arrayofstrings()
 	a:add(S'World!')
 	print(a.len, a(0), a(1))
 	a:call'free'
-	assert(a(0).size == 0)
+	assert(a(0).capacity == 0)
 	assert(a(0).len == 0)
 	a:free()
-	assert(a.size == 0)
+	assert(a.capacity == 0)
 	assert(a.len == 0)
 end
 
