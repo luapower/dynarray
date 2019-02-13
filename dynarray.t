@@ -70,14 +70,11 @@ local function arr_type(T, cmp, size_t, C)
 
 	local struct arr { p: &P } --opaque wrapper
 
-	local complete = arr.complete
-	function arr:complete()
-		if self:iscomplete() then return self end
-		complete(self)
+	function arr.metamethods.__typename(self)
+		return 'arr('..tostring(T)..')'
+	end
 
-		function arr.metamethods.__typename(self)
-			return 'arr('..tostring(T)..')'
-		end
+	function arr.metamethods:__staticinitialize()
 
 		function arr.metamethods.__tostring(self, format_arg, fmt, args, freelist, indent)
 			add(fmt, '%s[%d]<%llx>')
@@ -706,8 +703,7 @@ local function arr_type(T, cmp, size_t, C)
 			return iif(i > 0 and i < self.len, self.elements + i - 1, nil)
 		end
 
-		return self
-	end --arr:complete()
+	end --__staticinitialize
 
 	return arr
 end
