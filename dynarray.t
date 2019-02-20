@@ -49,7 +49,9 @@
 	a|view:reverse()
 	a|view:call(method, args...)
 
-	a:index(&v) -> i|nil
+	a:indexat(&v) -> i|nil
+	a:next(&v) -> &v|nil
+	a:prev(&v) -> &v|nil
 
 ]]
 
@@ -104,6 +106,50 @@ local function arr_type(T, cmp, size_t, C)
 	props.capacity = macro(function(self) return `self.p.capacity end)
 	props.elements = macro(function(self) return `[&T](self.p+1) end)
 
+	arr.metamethods.__for = function(self, body)
+		return quote
+			for i = 0, self.len do
+				[ body(`i, `&self.elements[i]) ]
+			end
+		end
+	end
+
+	local struct reverse_iter { array: arr; }
+	reverse_iter.metamethods.__for = function(self, body)
+		return quote
+			for i = self.array.len-1, -1, -1 do
+				[ body(`i, `&self.array.elements[i]) ]
+			end
+		end
+	end
+
+	local struct view {
+		array: &arr;
+		start: size_t;
+		len: size_t;
+	}
+
+	arr.view_type = view
+
+	local viewprops = addproperties(view)
+
+	view.metamethods.__for = function(self, body)
+		return quote
+			for i = 0, self.len do
+				[ body(`i, `&self.elements[i]) ]
+			end
+		end
+	end
+
+	local struct view_reverse_iter { view: view; }
+	view_reverse_iter.metamethods.__for = function(self, body)
+		return quote
+			for i = self.view.len-1, -1, -1 do
+				[ body(`i, `&self.view.elements[i]) ]
+			end
+		end
+	end
+
 	local added
 	local function addmethods()
 		if added then return end; added = true
@@ -114,8 +160,19 @@ local function arr_type(T, cmp, size_t, C)
 			self.p = &empty
 		end
 
+		if T.methods and T.methods.free then
+			terra arr:free_elements()
+				for i,e in self do
+					e:free()
+				end
+			end
+		else
+			arr.methods.free_elements = noop
+		end
+
 		terra arr:free()
 			if self.p == &empty then return end
+			self:free_elements()
 			free(self.p)
 			self.p = &empty
 		end
@@ -199,22 +256,6 @@ local function arr_type(T, cmp, size_t, C)
 
 		--ordered access
 
-		arr.metamethods.__for = function(self, body)
-			return quote
-				for i = 0, self.len do
-					[ body(`i, `&self.elements[i]) ]
-				end
-			end
-		end
-
-		local struct reverse_iter { array: arr; }
-		reverse_iter.metamethods.__for = function(self, body)
-			return quote
-				for i = self.array.len-1, -1, -1 do
-					[ body(`i, `&self.array.elements[i]) ]
-				end
-			end
-		end
 		terra arr:backwards()
 			return reverse_iter {@self}
 		end
@@ -284,16 +325,6 @@ local function arr_type(T, cmp, size_t, C)
 
 		--view interface
 
-		local struct view {
-			array: &arr;
-			start: size_t;
-			len: size_t;
-		}
-
-		arr.view_type = view
-
-		local viewprops = addproperties(view)
-
 		--NOTE: j is not the last position, but one position after that!
 		terra view:range(i: size_t, j: size_t, truncate: bool)
 			if i < 0 then i = self.len + i end
@@ -337,24 +368,8 @@ local function arr_type(T, cmp, size_t, C)
 			return self.array:set(self.start + i, val)
 		end
 
-		view.metamethods.__for = function(self, body)
-			return quote
-				for i = 0, self.len do
-					[ body(`i, `&self.elements[i]) ]
-				end
-			end
-		end
-
-		local struct reverse_iter { view: view; }
-		reverse_iter.metamethods.__for = function(self, body)
-			return quote
-				for i = self.view.len-1, -1, -1 do
-					[ body(`i, `&self.view.elements[i]) ]
-				end
-			end
-		end
 		terra view:backwards()
-			return reverse_iter {@self}
+			return view_reverse_iter {@self}
 		end
 
 		view.methods.copy = overload('copy', {})
@@ -690,7 +705,7 @@ local function arr_type(T, cmp, size_t, C)
 
 		--pointer interface. NOTE: pointers are unstable between mutations.
 
-		terra arr:indexof(pv: &T)
+		terra arr:indexat(pv: &T)
 			var i = pv - self.elements
 			return iif(i >= 0 and i < self.len, i, -1)
 		end
