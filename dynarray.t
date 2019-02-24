@@ -13,7 +13,7 @@
 	a:clear()
 	a:shrink() -> ok?
 	a:preallocate(capacity) -> ok?
-	a:resize(capacity) -> ok?
+	a:setcapacity(capacity) -> ok?
 	a.capacity
 	a.len
 
@@ -25,7 +25,7 @@
 	a|view(i[,default]) -> v
 	for i,&v in a|view[:backwards()] do ... end
 
-	a|view:setlen(len) -> ok?
+	a|view:resize(len) -> ok?
 	a:push|add(v) -> i|-1
 	a:push_junk|add_junk() -> &v|nil
 	a:insert(i, v) -> ok?
@@ -59,16 +59,22 @@ if not ... then require'dynarray_test'; return end
 
 local overload = terralib.overloadedfunction
 
+local arr_header = terralib.memoize(function(size_t)
+	local struct arr {
+		capacity: size_t;
+		len: size_t;
+	}
+	--static park space when the array is empty
+	local empty = constant(`arr{capacity=0, len=0})
+	return {arr, empty}
+end)
+local arr_header = function(size_t) return unpack(arr_header(size_t)) end
+
 local function arr_type(T, cmp, size_t, C)
 
 	setfenv(1, C)
 
-	local struct P {
-		capacity: size_t;
-		len: size_t;
-	}
-
-	local empty = constant(`P{capacity=0, len=0}) --static park space when empty
+	local P, empty = arr_header(size_t)
 
 	local struct arr { p: &P } --opaque wrapper
 
@@ -82,7 +88,7 @@ local function arr_type(T, cmp, size_t, C)
 			return quote
 				var len = strnlen(exp, [size_t:max()]-1)+1
 				var self: arr; self:init()
-				if self:resize(len) then
+				if self:setcapacity(len) then
 					memmove(self.elements, exp, len)
 					self.len = len
 				end
@@ -150,9 +156,7 @@ local function arr_type(T, cmp, size_t, C)
 		end
 	end
 
-	local added
-	local function addmethods()
-		if added then return end; added = true
+	addmethods(arr, function()
 
 		--storage
 
@@ -177,8 +181,10 @@ local function arr_type(T, cmp, size_t, C)
 			self.p = &empty
 		end
 
-		arr.methods.resize = overload'resize'
-		arr.methods.resize:adddefinition(terra(self: &arr, capacity: size_t, growth_factor: int): bool
+		arr.methods.setcapacity = overload'setcapacity'
+		arr.methods.setcapacity:adddefinition(terra(
+			self: &arr, capacity: size_t, growth_factor: int
+		): bool
 			assert(capacity >= 0)
 			if capacity == self.capacity then return true end
 			if capacity == 0 then self:free(); return true end
@@ -194,17 +200,19 @@ local function arr_type(T, cmp, size_t, C)
 			self.len = min(capacity, len)
 			return true
 		end)
-		arr.methods.resize:adddefinition(terra(self: &arr, capacity: size_t): bool
-			return self:resize(capacity, 2)
+		arr.methods.setcapacity:adddefinition(terra(
+			self: &arr, capacity: size_t
+		): bool
+			return self:setcapacity(capacity, 2)
 		end)
 
 		terra arr:preallocate(capacity: size_t): bool
-			return iif(capacity > self.capacity, self:resize(capacity), true)
+			return iif(capacity > self.capacity, self:setcapacity(capacity), true)
 		end
 
 		terra arr:shrink(): bool
 			if self.capacity == self.len then return true end
-			return self:resize(self.len)
+			return self:setcapacity(self.len)
 		end
 
 		--random access with auto-growing
@@ -229,7 +237,7 @@ local function arr_type(T, cmp, size_t, C)
 		local terra ensure(self: &arr, i: size_t, clear_i: size_t): &T
 			assert(i >= 0)
 			if i >= self.capacity then --grow size
-				if not self:resize(i+1) then
+				if not self:setcapacity(i+1) then
 					return nil
 				end
 			end
@@ -242,7 +250,7 @@ local function arr_type(T, cmp, size_t, C)
 			return &self.elements[i]
 		end
 
-		terra arr:setlen(len: size_t): bool
+		terra arr:resize(len: size_t): bool
 			return ensure(self, len-1, 0) ~= nil
 		end
 
@@ -275,7 +283,7 @@ local function arr_type(T, cmp, size_t, C)
 		terra arr:push_junk()
 			var newlen = self.len + 1
 			if self.capacity < newlen then
-				if not self:resize(newlen) then
+				if not self:setcapacity(newlen) then
 					return nil
 				end
 			end
@@ -296,7 +304,7 @@ local function arr_type(T, cmp, size_t, C)
 			if i < 0 then i = self.len + i end
 			assert(i >= 0 and n >= 0)
 			var b = max(0, self.len-i) --how many bytes must be moved
-			if not self:resize(max(self.capacity, i+n+b)) then return false end
+			if not self:setcapacity(max(self.capacity, i+n+b)) then return false end
 			if b <= 0 then return true end
 			memmove(&self.elements[i+n], &self.elements[i], sizeof(T) * b)
 			return true
@@ -401,7 +409,7 @@ local function arr_type(T, cmp, size_t, C)
 			if len == 0 then return true end
 			var newlen = max(self.len, i+len)
 			if newlen > self.len then
-				if not self:resize(newlen) then return false end
+				if not self:setcapacity(newlen) then return false end
 				if i >= self.len + 1 then --clear the gap
 					memset(&self.elements[self.len], 0, sizeof(T) * (i - self.len))
 				end
@@ -706,35 +714,21 @@ local function arr_type(T, cmp, size_t, C)
 		--pointer interface. NOTE: pointers are unstable between mutations.
 
 		terra arr:indexat(pv: &T)
-			var i = pv - self.elements
+			var i: size_t = pv - self.elements
 			return iif(i >= 0 and i < self.len, i, -1)
 		end
 
 		terra arr:next(pv: &T)
-			var i = pv - self.elements
+			var i: size_t = pv - self.elements
 			return iif(i >= 0 and i < self.len-1, self.elements + i + 1, nil)
 		end
 
 		terra arr:prev(pv: &T)
-			var i = pv - self.elements
+			var i: size_t = pv - self.elements
 			return iif(i > 0 and i < self.len, self.elements + i - 1, nil)
 		end
 
-	end --addmethods()
-
-	function arr.metamethods.__getmethod(self, name)
-		addmethods()
-		self.metamethods.__getmethod = nil
-		return self.methods[name]
-	end
-
-	--in case meta-code looks for the presence of a method...
-	local mt = {}; setmetatable(arr.methods, mt)
-	function mt:__index(name)
-		addmethods()
-		mt.__index = nil
-		return self[name]
-	end
+	end) --addmethods()
 
 	return arr
 end
