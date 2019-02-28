@@ -108,7 +108,7 @@ local function arr_type(T, cmp, size_t, C)
 
 	local props = addproperties(arr)
 
-	props.len = macro(function(self) return `self.p.len end)
+	props.len      = macro(function(self) return `self.p.len end)
 	props.capacity = macro(function(self) return `self.p.capacity end)
 	props.elements = macro(function(self) return `[&T](self.p+1) end)
 
@@ -136,6 +136,10 @@ local function arr_type(T, cmp, size_t, C)
 	}
 
 	arr.view_type = view
+
+	function view.metamethods.__typename(self)
+		return 'arrview('..tostring(T)..')'
+	end
 
 	local viewprops = addproperties(view)
 
