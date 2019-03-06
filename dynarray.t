@@ -3,7 +3,7 @@
 	Dynamic array type for Terra.
 	Written by Cosmin Apreutesei. Public domain.
 
-	local A = arr{T=, cmp=T.__cmp|default, size_t=int32, grow_factor=2,
+	local A = arr{T=, cmp=T.__cmp|default, size_t=int32,
 		C=require'low'}
 	var a = arr(T, ...) --preferred variant
 	var a = arr(&buffer, len, cmp=...)
@@ -31,12 +31,13 @@
 	a:insert(i, v) -> ok?
 	a:pop() -> v
 
-	a:insert_junk(i, n) -> ok?
+	a:insert_junk(i, n) -> i|-1
 	a:remove(i, [n])
 	a:update(i, a|view|&v,len) -> ok?
 	a:extend(a|view|&v,len) -> ok?
 	a|view:copy([a|view|&v]) -> a|view|&v
 	a:insert_array(i, a|view|&v,len) -> ok?
+	a:move(i1, i2)
 
 	a|view:sort([cmp: {&T, &T} -> int32])
 	a|view:sort_desc()
@@ -49,7 +50,8 @@
 	a|view:reverse()
 	a|view:call(method, args...)
 
-	a:indexat(&v) -> i|nil
+	a:index_at(&v) -> i|nil
+	a:remove_at(&v) -> i|nil
 	a:next(&v) -> &v|nil
 	a:prev(&v) -> &v|nil
 
@@ -65,16 +67,16 @@ local arr_header = terralib.memoize(function(size_t)
 		len: size_t;
 	}
 	--static park space when the array is empty
-	local empty = constant(`arr{capacity=0, len=0})
-	return {arr, empty}
+	arr.empty = constant(`arr{capacity=0, len=0})
+	return arr
 end)
-local arr_header = function(size_t) return unpack(arr_header(size_t)) end
 
 local function arr_type(T, cmp, size_t, C)
 
 	setfenv(1, C)
 
-	local P, empty = arr_header(size_t)
+	local P = arr_header(size_t)
+	local empty = P.empty
 
 	local struct arr { p: &P } --opaque wrapper
 
@@ -94,6 +96,8 @@ local function arr_type(T, cmp, size_t, C)
 				end
 				in self
 			end
+		elseif from == niltype then --makes [arr(T)](nil) work with constant()
+			return `arr { p = &empty }
 		else
 			error'invalid cast'
 		end
@@ -106,11 +110,11 @@ local function arr_type(T, cmp, size_t, C)
 		add(args, `self.elements)
 	end
 
-	local props = addproperties(arr)
+	addproperties(arr)
 
-	props.len      = macro(function(self) return `self.p.len end)
-	props.capacity = macro(function(self) return `self.p.capacity end)
-	props.elements = macro(function(self) return `[&T](self.p+1) end)
+	arr.properties.len      = macro(function(self) return `self.p.len end)
+	arr.properties.capacity = macro(function(self) return `self.p.capacity end)
+	arr.properties.elements = macro(function(self) return `[&T](self.p+1) end)
 
 	arr.metamethods.__for = function(self, body)
 		return quote
@@ -140,8 +144,11 @@ local function arr_type(T, cmp, size_t, C)
 	function view.metamethods.__typename(self)
 		return 'arrview('..tostring(T)..')'
 	end
+	function view.metamethods.__typename_ffi(self)
+		return 'arrview_'..tostring(T)
+	end
 
-	local viewprops = addproperties(view)
+	addproperties(view)
 
 	view.metamethods.__for = function(self, body)
 		return quote
@@ -247,7 +254,7 @@ local function arr_type(T, cmp, size_t, C)
 			end
 			if i >= self.len then --enlarge
 				if clear_i >= self.len + 1 then --clear the gap
-					memset(&self.elements[self.len], 0, sizeof(T) * (clear_i - self.len))
+					fill(&self.elements[self.len], (clear_i - self.len))
 				end
 				self.len = i + 1
 			end
@@ -255,7 +262,9 @@ local function arr_type(T, cmp, size_t, C)
 		end
 
 		terra arr:resize(len: size_t): bool
-			return ensure(self, len-1, 0) ~= nil
+			if ensure(self, len-1, 0) == nil then return false end
+			self.len = len
+			return true
 		end
 
 		terra arr:set(i: size_t, val: T): bool
@@ -294,7 +303,9 @@ local function arr_type(T, cmp, size_t, C)
 			self.len = newlen
 			return &self.elements[newlen-1]
 		end
-		arr.methods.add_junk = arr.methods.push_junk
+		terra arr:add_junk()
+			return self:push_junk()
+		end
 
 		terra arr:pop()
 			var v = self(-1)
@@ -308,10 +319,10 @@ local function arr_type(T, cmp, size_t, C)
 			if i < 0 then i = self.len + i end
 			assert(i >= 0 and n >= 0)
 			var b = max(0, self.len-i) --how many bytes must be moved
-			if not self:setcapacity(max(self.capacity, i+n+b)) then return false end
-			if b <= 0 then return true end
+			if not self:setcapacity(max(self.capacity, i+n+b)) then return -1 end
+			if b <= 0 then return i end
 			memmove(&self.elements[i+n], &self.elements[i], sizeof(T) * b)
-			return true
+			return i
 		end
 
 		arr.methods.remove = overload('remove', {})
@@ -361,7 +372,7 @@ local function arr_type(T, cmp, size_t, C)
 			return view {array = self, start = start, len = len}
 		end
 
-		viewprops.elements = macro(function(self)
+		view.properties.elements = macro(function(self)
 			return `&self.array.elements[self.start]
 		end)
 
@@ -415,7 +426,7 @@ local function arr_type(T, cmp, size_t, C)
 			if newlen > self.len then
 				if not self:setcapacity(newlen) then return false end
 				if i >= self.len + 1 then --clear the gap
-					memset(&self.elements[self.len], 0, sizeof(T) * (i - self.len))
+					fill(&self.elements[self.len], (i - self.len))
 				end
 				self.len = newlen
 			end
@@ -452,20 +463,31 @@ local function arr_type(T, cmp, size_t, C)
 		end)
 
 		terra arr:insert(i: size_t, val: T)
-			return self:insert_junk(i, 1) and self:set(i, val)
+			return self:insert_junk(i, 1) ~= -1 and self:set(i, val)
 		end
 
 		--NOTE: can't overload insert() because T can be an arr.
 		arr.methods.insert_array = overload('insert_array', {})
 		arr.methods.insert_array:adddefinition(terra(self: &arr, i: size_t, p: &T, len: size_t)
-			return self:insert_junk(i, len) and self:update(i, p, len)
+			return self:insert_junk(i, len) ~= -1 and self:update(i, p, len)
 		end)
 		arr.methods.insert_array:adddefinition(terra(self: &arr, i: size_t, a: arr)
-			return self:insert_junk(i, a.len) and self:update(i, a)
+			return self:insert_junk(i, a.len) ~= -1 and self:update(i, a)
 		end)
 		arr.methods.insert_array:adddefinition(terra(self: &arr, i: size_t, v: view)
-			return self:insert_junk(i, v.len) and self:update(i, v)
+			return self:insert_junk(i, v.len) ~= -1 and self:update(i, v)
 		end)
+
+		terra arr:move(i1: size_t, i2: size_t)
+			if i1 < 0 then i1 = self.len + i1 end; assert(i1 >= 0 and i1 < self.len)
+			if i2 < 0 then i2 = self.len + i2 end; assert(i2 >= 0)
+			i2 = min(i2, self.len-1)
+			if i2 == i1 then return end
+			var tmp = self(i1)
+			self:remove(i1)
+			assert(self:insert(i2, tmp))
+		end
+
 
 		--comparing elements and arrays
 
@@ -639,10 +661,10 @@ local function arr_type(T, cmp, size_t, C)
 			gte = terra(a: &T, b: &T) return @a >= @b end
 		end
 		if lt then
-			props.lt  = macro(function() return lt  end)
-			props.gt  = macro(function() return gt  end)
-			props.lte = macro(function() return lte end)
-			props.gte = macro(function() return gte end)
+			arr.properties.lt  = macro(function() return lt  end)
+			arr.properties.gt  = macro(function() return gt  end)
+			arr.properties.lte = macro(function() return lte end)
+			arr.properties.gte = macro(function() return gte end)
 		end
 
 		view.methods.binsearch = overload('binsearch', {})
@@ -717,7 +739,7 @@ local function arr_type(T, cmp, size_t, C)
 
 		--pointer interface. NOTE: pointers are unstable between mutations.
 
-		terra arr:indexat(pv: &T)
+		terra arr:index_at(pv: &T)
 			var i: size_t = pv - self.elements
 			return iif(i >= 0 and i < self.len, i, -1)
 		end
@@ -732,7 +754,22 @@ local function arr_type(T, cmp, size_t, C)
 			return iif(i > 0 and i < self.len, self.elements + i - 1, nil)
 		end
 
+		terra arr:remove_at(e: &T)
+			self:remove(self:index_at(e))
+		end
+
 	end) --addmethods()
+
+	--publish() metamethods.
+	function arr.metamethods.__typename_ffi(self)
+		return 'arr_'..tostring(T)
+	end
+	function arr.metamethods.__ismethodpublic(self, name)
+		return name ~= 'backwards'
+	end
+	function view.metamethods.__ismethodpublic(self, name)
+		return name ~= 'backwards'
+	end
 
 	return arr
 end
