@@ -14,19 +14,17 @@ test_autogrow()
 local terra test_stack()
 	var a = arr(int)
 	for i = 0, 10000 do
-		assert(a:push(i) == i)
+		a:push(i)
 	end
 	for i, v in a:backwards() do
 		assert(a:pop() == i)
 	end
 	assert(a.len == 0)
 	assert(a.capacity > 0)
-	a:shrink()
+	a.capacity = a.len
 	assert(a.capacity == 0)
 end
 test_stack()
-
---local terra test_
 
 local cmp = terra(a: &int, b: &int): int32
 	return iif(@a < @b, -1, iif(@a > @b, 1, 0))
@@ -41,7 +39,7 @@ local terra test_dynarray()
 	a:set(19, 4321)
 	assert(a(19) == 4321)
 	var x = -1
-	for i,v in a:view(5, 12) do
+	for i,v in a:sub(5, 12) do
 		@v = x
 		x = x * 2
 	end
@@ -49,23 +47,25 @@ local terra test_dynarray()
 	for i,v in a do
 		print(i, @v)
 	end
-	print('binsearch -5000: ', a:binsearch(-5000, a.lt))
-	print('binsearch_macro -5000: ', a:binsearch_macro(-5000))
+	assert(a:binsearch(-maxint) == 0)
+	assert(a:binsearch(5000) == 15)
+	assert(a:binsearch(maxint) == a.len)
 	a:free()
 end
 
 local S = arr(int8)
 local terra test_arrayofstrings()
 	var a = arr(S)
-	a:add(S'Hello')
+	var s = S'Hello'
+	a:add(s)
 	a:add(S'World!')
 	print(a.len, a(0), a(1))
-	a:call'free'
-	assert(a(0).capacity == 0)
-	assert(a(0).len == 0)
-	a:free()
-	assert(a.capacity == 0)
-	assert(a.len == 0)
+	a.view:call'free'
+	--assert(a(0).capacity == 0)
+	--assert(a(0).len == 0)
+	--a:free()
+	--assert(a.capacity == 0)
+	--assert(a.len == 0)
 end
 
 local terra test_wrap()
@@ -89,11 +89,10 @@ local terra test_hashmap()
 	h:put(s2, 8)
 	h:put(s1, 3)
 	print(@h:at(s2), @h:at(s1), h.count)
+	h:free()
 	s1:free()
 	s2:free()
-	h:free()
 end
-
 
 test_dynarray()
 test_arrayofstrings()
