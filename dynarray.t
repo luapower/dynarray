@@ -275,8 +275,8 @@ local function arr_type(T, cmp, size_t)
 		end)
 		arr.methods.copy:adddefinition(terra(self: &arr)
 			var a = arr(nil)
-			a.len = self.len
-			return self.view:copy(&a.view)
+			a:add(&self.view)
+			return a
 		end)
 
 		terra arr:move(i0: size_t, i: size_t)
