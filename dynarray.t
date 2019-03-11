@@ -3,14 +3,18 @@
 	Dynamic array type for Terra.
 	Written by Cosmin Apreutesei. Public domain.
 
+	A dynamic array is a typed interface over realloc().
+
 	local A = arr{T=,[cmp=],[size_t=int]}       create a type from Lua
 	local A = arr(T, [cmp=],[size_t=int])       create a type from Lua
 	var a =   arr{T=,[cmp=],[size_t=int]}       create a value from Terra
 	var a =   arr(T, [cmp=],[size_t=int])       create a value from Terra
-	var a =   arr(T, elements,len[ ,...])       create a value from Terra
+	var a =   arr(T, elements, len[,...])       create a value from Terra
 	var a = A(nil)                              nil-cast for use in constant()
 	var a = A{elements,len}                     field order is part of the API
 	var a = A{elements=,len=}                   fields are part of the API
+	var a = A(&v)                               copy constructor from view
+	var a = A(&a)                               copy constructor from array
 	a:init()                                    initialize
 
 	var a = A(rawstring|'string constant')      cast from C string
@@ -26,24 +30,24 @@
 	a:free()                                    free elements buffer
 	a:setcapacity(n) -> ok?                     `a.capacity = n` with error checking
 
-	a:set(i,T) -> i                             set value at index with auto-grow
-	a:set(i) -> &T                              auto-grow and get address at index
+	a:set(i,t) -> i                             set value at index with auto-grow
+	a:set(i) -> &t                              auto-grow and get address at index
 
-	a:push|add() -> &T                          a:set(self.len)
-	a:push|add(T) -> i                          a:set(self.len, t)
-	a:push|add(&T,n) -> i                       a:insert(self.len, &T, n)
+	a:push|add() -> &t                          a:set(self.len)
+	a:push|add(t) -> i                          a:set(self.len, t)
+	a:push|add(&t,n) -> i                       a:insert(self.len, &T, n)
 	a:push|add(&v) -> i                         a:insert(self.len, &v)
 	a:push|add(&a) -> i                         a:insert(self.len, &a)
 	a:pop() -> i                                dec(self.len)
 
 	a:insertn(i,n) -> i                         make room for n elements at i
-	a:insert(i) -> &T                           make room at i and return address
-	a:insert(i,T) -> i                          insert element at i
-	a:insert(i,&T,n) -> i                       insert buffer at i
+	a:insert(i) -> &t                           make room at i and return address
+	a:insert(i,t) -> i                          insert element at i
+	a:insert(i,&t,n) -> i                       insert buffer at i
 	a:insert(i,&v) -> i                         insert arrayview at i
 	a:insert(i,&a) -> i                         insert dynarray at i
 	a:remove(i,[n]) -> i                        remove n elements starting at i
-	a:remove(&T[,default]) -> i                 remove element at address
+	a:remove(&t[,default]) -> i                 remove element at address
 
 	a:copy() -> &a                              copy to new array
 	a:move(i, new_i)                            move element to new position
@@ -73,19 +77,24 @@ local function arr_type(T, cmp, size_t)
 	end
 
 	function arr.metamethods.__cast(from, to, exp)
-		if T == int8 and from == rawstring then
-			--initialize with a null-terminated string
-			return quote
-				var len = strnlen(exp, [size_t:max()]-1)+1
-				var self = arr(nil)
-				self:add(exp, len)
-				in self
+		if to == arr then
+			if T == int8 and from == rawstring then
+				--initialize with a null-terminated string
+				return quote
+					var len = strnlen(exp, [size_t:max()]-1)+1
+					var self = arr(nil)
+					self:add(exp, len)
+					in self
+				end
+			elseif from == niltype then --makes [arr(T)](nil) work in a constant()
+				return arr.empty
+			elseif from == view then
+				return quote var a = arr(nil); a:add(v) in a end
+			elseif from == arr and to == arr then
+				return quote var a = arr(nil); a:add(a) in a end
 			end
-		elseif from == niltype then --makes [arr(T)](nil) work in a constant()
-			return arr.empty
-		else
-			assert(false, 'invalid cast from ', from, ' to ', to, ': ', exp)
 		end
+		assert(false, 'invalid cast from ', from, ' to ', to, ': ', exp)
 	end
 
 	function arr.metamethods.__tostring(self, format_arg, fmt, args, freelist, indent)
@@ -336,7 +345,7 @@ return macro(
 	--calling it from Terra returns a new array.
 	function(arg1, ...)
 		local T, lval, len, cmp, size_t
-		if arg1 and arg1:islvalue() then --wrap raw pointer: arr(&v, len, ...)
+		if arg1 and arg1:islvalue() then --wrap raw pointer: arr(&t, len, ...)
 			lval, len, cmp, size_t = arg1, ...
 			T = lval:gettype()
 			assert(T:ispointer())

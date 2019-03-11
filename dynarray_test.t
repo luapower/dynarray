@@ -4,6 +4,7 @@ setfenv(1, require'low')
 local terra test_forward_methods()
 	var a = arr(int)
 	assert(a:at(0, nil) == nil)
+	a.len = 5
 end
 test_forward_methods()
 
