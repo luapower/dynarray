@@ -30,8 +30,8 @@
 	a:free()                                    free elements buffer
 	a:setcapacity(n) -> ok?                     `a.capacity = n` with error checking
 
-	a:set(i,t) -> i                             set value at index with auto-grow
-	a:set(i) -> &t                              auto-grow and get address at index
+	a:set(i,t) -> i                             grow array to i and set value at i
+	a:set(i) -> &t                              grow to i and get address at index
 
 	a:push|add() -> &t                          a:set(self.len)
 	a:push|add(t) -> i                          a:set(self.len, t)
