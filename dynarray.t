@@ -104,14 +104,6 @@ local function arr_type(T, cmp, size_t)
 
 	addmethods(arr, function()
 
-		--create a method that forwards the call to the array view.
-		local function forwardmethod(name)
-			return macro(function(self, ...)
-				local args = {...}
-				return `self.view:[name]([args])
-			end)
-		end
-
 		terra arr:init()
 			@self = [arr.empty]
 		end
@@ -313,14 +305,18 @@ local function arr_type(T, cmp, size_t)
 			return sizeof(arr) + sizeof(T) * self.len
 		end
 
-		--forward all other methods to the view on-demand.
-		after_getmethod(arr, function(arr, name)
-			if view:getmethod(name) then
-				return forwardmethod(name)
-			end --fall through to own methods
-		end)
-
 	end) --addmethods()
+
+	--forward all other methods to the view on-demand.
+	after_getmethod(arr, function(arr, name)
+		if view:getmethod(name) then
+			return macro(function(self, ...)
+				local args = {...}
+				return `self.view:[name]([args])
+			end)
+		end --fall through to own methods
+	end)
+
 
 	return arr
 end

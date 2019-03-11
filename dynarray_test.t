@@ -1,6 +1,12 @@
 
 setfenv(1, require'low')
 
+local terra test_forward_methods()
+	var a = arr(int)
+	assert(a:at(0, nil) == nil)
+end
+test_forward_methods()
+
 local terra test_autogrow()
 	var a = arr(int)
 	for i = 0,10000 do
