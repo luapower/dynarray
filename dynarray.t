@@ -336,7 +336,7 @@ local arr_type = function(T, cmp, size_t)
 	return arr_type(T, cmp, size_t)
 end
 
-arr = macro(
+return macro(
 	--calling it from Terra returns a new array.
 	function(arg1, ...)
 		local T, lval, len, cmp, size_t
