@@ -118,8 +118,10 @@ local function arr_type(T, cmp, size_t)
 		end
 
 		terra arr:free()
+			if self.capacity == 0 and self.elements ~= nil then return end
+			--^the view was assigned by the user (elements are not owned).
 			free(self.elements)
-			@self = [arr.empty]
+			self:init()
 		end
 
 		arr.methods.setcapacity = overload'setcapacity'
@@ -129,6 +131,8 @@ local function arr_type(T, cmp, size_t)
 			assert(capacity >= 0)
 			if capacity == self.capacity then return true end
 			if capacity == 0 then self:free(); return true end
+			if self.capacity == 0 and self.elements ~= nil then return false end
+			--^the view was assigned by the user (elements are not owned).
 			var len = self.len
 			if capacity > self.capacity then --grow
 				capacity = max(capacity, self.capacity * growth_factor)
