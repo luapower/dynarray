@@ -1,57 +1,54 @@
-jit.off(true, true)
 --[[
 
 	Dynamic array type for Terra.
 	Written by Cosmin Apreutesei. Public domain.
 
-	local A = arr{T=, cmp=T.{methods|metamethods}.__cmp, size_t=int}
-	var a = arr(T, ...) --preferred variant
-	var a = arr(&buffer, len, cmp=...)
-	var a: A = nil -- =nil is imortant!
-	var a = A(nil) -- (nil) is important!
-	a:free()
-	a:clear()
-	a:setcapacity(capacity) -> ok?
-	a.capacity
-	a.len
+	local A = arr{T=,[cmp=],[size_t=int]}       create a type from Lua
+	local A = arr(T, [cmp=],[size_t=int])       create a type from Lua
+	var a =   arr{T=,[cmp=],[size_t=int]}       create a value from Terra
+	var a =   arr(T, [cmp=],[size_t=int])       create a value from Terra
+	var a =   arr(T, elements,len[ ,...])       create a value from Terra
+	var a = A(nil)                              nil-cast for use in constant()
+	var a = A{elements,len}                     field order is part of the API
+	var a = A{elements=,len=}                   fields are part of the API
+	a:init()                                    initialize
 
-	a|view:range(i, j, truncate?) -> start, len
-	a|view:view(i, j) -> view
+	var a = A(rawstring|'string constant')      cast from C string
+	a:onrawstring(rawstring) -> a               init with C string
 
-	a|view:set(i, v) -> ok?
-	a|view:at(i) -> &v|nil
-	a|view(i[,default]) -> v
-	for i,&v in a|view[:backwards()] do ... end
+	a.view                                      (read/only) arr's arrayview
+	a.elements                                  (read/only) array elements
+	a.len                                       (read/write) array length
+	a.capacity                                  (read/write) array capacity
+	a.min_len                                   (write/only) grow array
+	a.min_capacity                              (write/only) grow capacity
 
-	a|view:resize(len) -> ok?
-	a:push|add(v) -> i|-1
-	a:push_junk|add_junk() -> &v|nil
-	a:insert(i, v) -> ok?
-	a:pop() -> v
+	a:free()                                    free elements buffer
+	a:setcapacity(n) -> ok?                     `a.capacity = n` with error checking
 
-	a:insert_junk(i, n) -> i|-1
-	a:remove(i, [n])
-	a:update(i, a|view|&v,len) -> ok?
-	a:extend(a|view|&v,len) -> ok?
-	a|view:copy([a|view|&v]) -> a|view|&v
-	a:insert_array(i, a|view|&v,len) -> ok?
-	a:move(i1, i2)
+	a:set(i,T) -> i                             set value at index with auto-grow
+	a:set(i) -> &T                              auto-grow and get address at index
 
-	a|view:sort([cmp: {&T, &T} -> int32])
-	a|view:sort_desc()
-	a|view:find(v) -> i
-	a|view:count(v) -> n
-	a|view:binsearch(v, cmp: {&T, &T} -> bool) -> i
-	a|view:binsearch(v, a.lt|a.lte|a.gt|a.gte) -> i
-	a|view:binsearch_macro(v, cmp(t, i, v) -> bool) -> i
+	a:push|add() -> &T                          a:set(self.len)
+	a:push|add(T) -> i                          a:set(self.len, t)
+	a:push|add(&T,n) -> i                       a:insert(self.len, &T, n)
+	a:push|add(&v) -> i                         a:insert(self.len, &v)
+	a:push|add(&a) -> i                         a:insert(self.len, &a)
+	a:pop() -> i                                dec(self.len)
 
-	a|view:reverse()
-	a|view:call(method, args...)
+	a:insertn(i,n) -> i                         make room for n elements at i
+	a:insert(i) -> &T                           make room at i and return address
+	a:insert(i,T) -> i                          insert element at i
+	a:insert(i,&T,n) -> i                       insert buffer at i
+	a:insert(i,&v) -> i                         insert arrayview at i
+	a:insert(i,&a) -> i                         insert dynarray at i
+	a:remove(i,[n]) -> i                        remove n elements starting at i
+	a:remove(&T[,default]) -> i                 remove element at address
 
-	a:index_at(&v) -> i|nil
-	a:remove_at(&v) -> i|nil
-	a:next(&v) -> &v|nil
-	a:prev(&v) -> &v|nil
+	a:copy() -> &a                              copy to new array
+	a:move(i, new_i)                            move element to new position
+
+	a:METHOD(...) -> a.view:METHOD(...)         call a method of a.view through a
 
 ]]
 
@@ -74,9 +71,6 @@ local function arr_type(T, cmp, size_t)
 	function arr.metamethods.__typename(self)
 		return 'arr('..tostring(T)..')'
 	end
-	function arr.metamethods.__typename_ffi(self)
-		return 'arr_'..tostring(T)
-	end
 
 	function arr.metamethods.__cast(from, to, exp)
 		if T == int8 and from == rawstring then
@@ -84,7 +78,7 @@ local function arr_type(T, cmp, size_t)
 			return quote
 				var len = strnlen(exp, [size_t:max()]-1)+1
 				var self = arr(nil)
-				self:extend(exp, len)
+				self:add(exp, len)
 				in self
 			end
 		elseif from == niltype then --makes [arr(T)](nil) work in a constant()
@@ -159,16 +153,6 @@ local function arr_type(T, cmp, size_t)
 			assert(self:setcapacity(max(capacity, self.capacity)))
 		end
 
-		terra arr:setlen(len: size_t)
-			assert(len >= 0)
-			if self:setcapacity(max(len, self.capacity)) then
-				self.view.len = len
-				return true
-			else
-				return false
-			end
-		end
-
 		--setting, pushing and popping elements
 
 		terra arr:set_len(len: size_t)
@@ -203,26 +187,61 @@ local function arr_type(T, cmp, size_t)
 		arr.methods.push:adddefinition(terra(self: &arr)
 			return self:set(self.len)
 		end)
-		arr.methods.add = arr.methods.push --TODO: doesn't work with saveobj()
+		arr.methods.add = arr.methods.push
 
 		terra arr:pop()
-			self.len = self.len-1
-			return self.len
+			return dec(self.len)
 		end
 
 		--shifting segments to the left or to the right
 
 		--returns the absolute i because if i was negative, it is now invalid.
+		--note: not overloading insert() here because of ambiguity with
+		--insert(i,T) when T=size_t.
 		terra arr:insertn(i: size_t, n: size_t)
 			if i < 0 then i = self.len + i end; assert(i >= 0)
 			assert(n >= 0)
 			var b = max(0, self.len-i) --how many elements must be moved
-			self.min_capacity = i+n+b
+			self.min_len = i+n+b
 			if b > 0 then
 				copy(self.elements+i+n, self.elements+i, b)
 			end
 			return i
 		end
+
+		arr.methods.insert = overload'insert'
+		arr.methods.insert:adddefinition(terra(self: &arr, i: size_t)
+			return self.elements + self:insertn(i, 1)
+		end)
+		arr.methods.insert:adddefinition(terra(self: &arr, i: size_t, val: T)
+			i = self:insertn(i, 1)
+			self.elements[i] = val
+		end)
+		arr.methods.insert:adddefinition(terra(self: &arr, i: size_t, p: &T, n: size_t)
+			i = self:insertn(i, n)
+			copy(self.elements+i, p, n)
+			return i
+		end)
+		arr.methods.insert:adddefinition(terra(self: &arr, i: size_t, v: &view)
+			i = self:insertn(i, v.len)
+			v:copy(self.elements+i)
+			return i
+		end)
+		arr.methods.insert:adddefinition(terra(self: &arr, i: size_t, a: &arr)
+			i = self:insertn(i, a.len)
+			a.view:copy(self.elements+i)
+			return i
+		end)
+
+		arr.methods.add:adddefinition(terra(self: &arr, p: &T, n: size_t)
+			return self:insert(self.len, p, n)
+		end)
+		arr.methods.add:adddefinition(terra(self: &arr, v: &view)
+			return self:insert(self.len, v)
+		end)
+		arr.methods.add:adddefinition(terra(self: &arr, a: &arr)
+			return self:insert(self.len, a)
+		end)
 
 		--returns the absolute i because if i was negative, it is now invalid.
 		arr.methods.remove = overload'remove'
@@ -239,98 +258,45 @@ local function arr_type(T, cmp, size_t)
 		arr.methods.remove:adddefinition(terra(self: &arr, i: size_t)
 			return self:remove(i, 1)
 		end)
-
-		arr.methods.insert = overload'insert'
-		arr.methods.insert:adddefinition(terra(self: &arr, i: size_t)
-			return self.elements + self:insertn(i, 1)
+		arr.methods.remove:adddefinition(terra(self: &arr, e: &T)
+			return self:remove(self.view:index(e))
 		end)
-		arr.methods.insert:adddefinition(terra(self: &arr, i: size_t, val: T)
-			return self:set(self:insertn(i, 1), val)
-		end)
-
-		arr.methods.update = overload'update'
-		arr.methods.update:adddefinition(terra(self: &arr, i: size_t, p: &T, len: size_t)
-			if i < 0 then i = self.len + i end; assert(i >= 0)
-			assert(len >= 0)
-			self.min_len = i + len
-			copy(self.elements+i, p, len)
-			return i
-		end)
-		arr.methods.update:adddefinition(terra(self: &arr, i: size_t, v: &view)
-			return self:update(i, v.elements, v.len)
-		end)
-		arr.methods.update:adddefinition(terra(self: &arr, i: size_t, a: &arr)
-			return self:update(i, a.elements, a.len)
-		end)
-
-		arr.methods.insert:adddefinition(terra(self: &arr, i: size_t, p: &T, len: size_t)
-			return self:update(self:insertn(i, len), p, len)
-		end)
-
-		arr.methods.extend = overload'extend'
-		arr.methods.extend:adddefinition(terra(self: &arr, p: &T, len: size_t)
-			return self:update(self.len, p, len)
-		end)
-		arr.methods.extend:adddefinition(terra(self: &arr, v: &view)
-			return self:update(self.len, v)
-		end)
-		arr.methods.extend:adddefinition(terra(self: &arr, a: &arr)
-			return self:update(self.len, a)
+		arr.methods.remove:adddefinition(terra(self: &arr, e: &T, default: size_t)
+			return self:remove(self.view:index(e, default))
 		end)
 
 		arr.methods.copy = overload'copy'
-		arr.methods.copy:adddefinition(terra(self: &arr)
-			var a = arr(nil)
-			a:update(0, self)
-			return a
-		end)
-		arr.methods.copy:adddefinition(terra(self: &arr, dst: &T)
-			copy(self.elements, dst, self.len)
-			return dst
-		end)
-
-		--[=[
-
-		terra arr:move(i1: size_t, i2: size_t)
-			if i1 < 0 then i1 = self.len + i1 end; assert(i1 >= 0 and i1 < self.len)
-			if i2 < 0 then i2 = self.len + i2 end; assert(i2 >= 0)
-			i2 = min(i2, self.len-1)
-			if i2 == i1 then return end
-			var tmp = self(i1)
-			self:remove(i1)
-			assert(self:insert(i2, tmp))
-		end
-
-		terra arr:remove_at(e: &T)
-			self:remove(self:index_at(e))
-		end
-
-		]=]
-
-		--methods that can't be forwarded to the view directly,
-		--or that need additional overloaded definitions.
-
-		arr.methods.copy = overload'copy'
-		arr.methods.copy:adddefinition(terra(self: &arr, dst: &arr)
-			dst.len = self.len
-			return self.view:copy(&dst.view)
-		end)
 		arr.methods.copy:adddefinition(terra(self: &arr, dst: &T)
 			return self.view:copy(dst)
 		end)
 		arr.methods.copy:adddefinition(terra(self: &arr, dst: &view)
 			return self.view:copy(dst)
 		end)
+		arr.methods.copy:adddefinition(terra(self: &arr)
+			var a = arr(nil)
+			a.len = self.len
+			return self.view:copy(&a.view)
+		end)
+
+		terra arr:move(i0: size_t, i: size_t)
+			i0 = self.view:index(i0)
+			if i < 0 then i = self.len + i end; assert(i >= 0)
+			if i ~= i0 then
+				var tmp = self.view(i0)
+				self:remove(i0)
+				self:insert(i, tmp)
+			end
+		end
 
 		if view:getmethod'__cmp' then
 			terra arr:__cmp(a: &arr)
 				return self.view:__cmp(&a.view)
 			end
-			local vmm = view.metamethods
-			arr.metamethods.__lt = terra(self: &arr, a: &arr) return vmm.__lt(&self.view, &a.view) end
-			arr.metamethods.__gt = terra(self: &arr, a: &arr) return vmm.__gt(&self.view, &a.view) end
-			arr.metamethods.__le = terra(self: &arr, a: &arr) return vmm.__le(&self.view, &a.view) end
-			arr.metamethods.__ge = terra(self: &arr, a: &arr) return vmm.__ge(&self.view, &a.view) end
+			local m = view.metamethods
+			arr.metamethods.__lt = terra(self: &arr, a: &arr) return m.__lt(&self.view, &a.view) end
+			arr.metamethods.__gt = terra(self: &arr, a: &arr) return m.__gt(&self.view, &a.view) end
+			arr.metamethods.__le = terra(self: &arr, a: &arr) return m.__le(&self.view, &a.view) end
+			arr.metamethods.__ge = terra(self: &arr, a: &arr) return m.__ge(&self.view, &a.view) end
 		end
 
 		if view:getmethod'__eq' then
@@ -342,8 +308,6 @@ local function arr_type(T, cmp, size_t)
 				return not (self == other)
 			end)
 		end
-
-		--memsize for caches and debugging
 
 		terra arr:__memsize(): size_t
 			return sizeof(arr) + sizeof(T) * self.len
@@ -388,7 +352,7 @@ arr = macro(
 		size_t = size_t and size_t:astype()
 		local arr = arr_type(T, cmp, size_t)
 		if lval then
-			return quote var a = arr(nil); a:extend(lval, len) in a end
+			return quote var a = arr(nil); a:add(lval, len) in a end
 		else
 			return `arr(nil)
 		end

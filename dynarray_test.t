@@ -61,11 +61,11 @@ local terra test_arrayofstrings()
 	a:add(S'World!')
 	print(a.len, a(0), a(1))
 	a.view:call'free'
-	--assert(a(0).capacity == 0)
-	--assert(a(0).len == 0)
-	--a:free()
-	--assert(a.capacity == 0)
-	--assert(a.len == 0)
+	assert(a(0).capacity == 0)
+	assert(a(0).len == 0)
+	a:free()
+	assert(a.capacity == 0)
+	assert(a.len == 0)
 end
 
 local terra test_wrap()
