@@ -10,12 +10,12 @@
 	var a =   arr{T=,[cmp=],[size_t=int]}       create a value from Terra
 	var a =   arr(T, [cmp=],[size_t=int])       create a value from Terra
 	var a =   arr(T, elements, len[,...])       create a value from Terra
-	var a = A(nil)                              nil-cast for use in constant()
+	var a = A(nil)                              nil-cast (for use in constant())
 	var a = A{elements,len}                     field order is part of the API
 	var a = A{elements=,len=}                   fields are part of the API
 	var a = A(&v)                               copy constructor from view
 	var a = A(&a)                               copy constructor from array
-	a:init()                                    initialize
+	a:init()                                    initialize (for struct members)
 
 	var a = A(rawstring|'string constant')      cast from C string
 	a:onrawstring(rawstring) -> a               init with C string
@@ -340,7 +340,7 @@ local arr_type = function(T, cmp, size_t)
 		T, cmp, size_t = T.T, T.cmp, T.size_t
 	end
 	assert(T)
-	cmp = cmp or (T:isaggregate() and (T.metamethods.__cmp or T:getmethod'__cmp'))
+	cmp = cmp or (T:isaggregate() and T:getmethod'__cmp')
 	size_t = size_t or int
 	return arr_type(T, cmp, size_t)
 end
