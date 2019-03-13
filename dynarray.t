@@ -120,42 +120,31 @@ local function arr_type(T, cmp, size_t)
 		terra arr:free()
 			if self.capacity == 0 and self.elements ~= nil then return end
 			--^the view was assigned by the user (elements are not owned).
-			free(self.elements)
+			memfree(self.view.elements)
 			self:init()
 		end
 
-		arr.methods.setcapacity = overload'setcapacity'
-		arr.methods.setcapacity:adddefinition(terra(
-			self: &arr, capacity: size_t, growth_factor: int
-		): bool
+		terra arr:setcapacity(capacity: size_t): bool
 			assert(capacity >= 0)
 			if capacity == self.capacity then return true end
 			if capacity == 0 then self:free(); return true end
 			if self.capacity == 0 and self.elements ~= nil then return false end
 			--^the view was assigned by the user (elements are not owned).
 			var len = self.len
-			if capacity > self.capacity then --grow
-				capacity = max(capacity, self.capacity * growth_factor)
-			end
-			var elements = [&T](alloc(T, capacity, self.elements))
+			var elements = alloc(T, capacity, self.elements)
 			if elements == nil then return false end
 			self.view.elements = elements
 			self._capacity = capacity
 			self.view.len = min(capacity, len)
 			return true
-		end)
-		arr.methods.setcapacity:adddefinition(terra(
-			self: &arr, capacity: size_t
-		): bool
-			return self:setcapacity(capacity, 2)
-		end)
+		end
 
 		terra arr:set_capacity(capacity: size_t)
 			assert(self:setcapacity(capacity))
 		end
 
 		terra arr:set_min_capacity(capacity: size_t)
-			assert(self:setcapacity(max(capacity, self.capacity)))
+			assert(self:setcapacity(max(nextpow2(capacity), self.capacity)))
 		end
 
 		--setting, pushing and popping elements
@@ -330,7 +319,6 @@ local function arr_type(T, cmp, size_t)
 		end --fall through to own methods
 	end)
 
-
 	return arr
 end
 arr_type = memoize(arr_type)
@@ -340,7 +328,7 @@ local arr_type = function(T, cmp, size_t)
 		T, cmp, size_t = T.T, T.cmp, T.size_t
 	end
 	assert(T)
-	cmp = cmp or (T:isaggregate() and T:getmethod'__cmp')
+	cmp = cmp or (T.getmethod and T:getmethod'__cmp')
 	size_t = size_t or int
 	return arr_type(T, cmp, size_t)
 end
