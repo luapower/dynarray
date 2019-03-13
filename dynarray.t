@@ -11,14 +11,12 @@
 	var a =   arr(T, [cmp=],[size_t=int])       create a value from Terra
 	var a =   arr(T, elements, len[,...])       create a value from Terra
 	var a = A(nil)                              nil-cast (for use in constant())
-	var a = A{elements,len}                     field order is part of the API
-	var a = A{elements=,len=}                   fields are part of the API
 	var a = A(&v)                               copy constructor from view
 	var a = A(&a)                               copy constructor from array
 	a:init()                                    initialize (for struct members)
 
 	var a = A(rawstring|'string constant')      cast from C string
-	a:onrawstring(rawstring) -> a               init with C string
+	a:fromrawstring(rawstring)                  init with C string
 
 	a.view                                      (read/only) arr's arrayview
 	a.elements                                  (read/only) array elements
@@ -79,14 +77,8 @@ local function arr_type(T, cmp, size_t)
 	function arr.metamethods.__cast(from, to, exp)
 		if to == arr then
 			if T == int8 and from == rawstring then
-				--initialize with a null-terminated string
-				return quote
-					var len = strnlen(exp, [size_t:max()]-1)+1
-					var self = arr(nil)
-					self:add(exp, len)
-					in self
-				end
-			elseif from == niltype then --makes [arr(T)](nil) work in a constant()
+				return quote var a = arr(nil); a:fromrawstring(exp) in a end
+			elseif from == niltype then
 				return arr.empty
 			elseif from == view then
 				return quote var a = arr(nil); a:add(v) in a end
@@ -147,8 +139,6 @@ local function arr_type(T, cmp, size_t)
 			assert(self:setcapacity(max(nextpow2(capacity), self.capacity)))
 		end
 
-		--setting, pushing and popping elements
-
 		terra arr:set_len(len: size_t)
 			assert(len >= 0)
 			self.min_capacity = len
@@ -158,6 +148,17 @@ local function arr_type(T, cmp, size_t)
 		terra arr:set_min_len(len: size_t)
 			self.len = max(len, self.len)
 		end
+
+		if view:getmethod'onrawstring' then
+			terra arr:fromrawstring(s: rawstring)
+				var v = view(s)
+				self.len = v.len
+				v:copy(self.elements)
+				return self
+			end
+		end
+
+		--setting, pushing and popping elements
 
 		--unlike view:set(), arr:set() grows the array automatically, possibly
 		--creating a hole of uninitialized elements.
