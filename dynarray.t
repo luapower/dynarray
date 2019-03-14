@@ -13,7 +13,10 @@
 	var a = A(nil)                              nil-cast (for use in constant())
 	var a = A(&v)                               copy constructor from view
 	var a = A(&a)                               copy constructor from array
+
 	a:init()                                    initialize (for struct members)
+	a:free()                                    free elements buffer
+	a:setcapacity(n) -> ok?                     `a.capacity = n` with error checking
 
 	var a = A(rawstring|'string constant')      cast from C string
 	a:fromrawstring(rawstring)                  init with C string
@@ -24,9 +27,6 @@
 	a.capacity                                  (read/write) array capacity
 	a.min_len                                   (write/only) grow array
 	a.min_capacity                              (write/only) grow capacity
-
-	a:free()                                    free elements buffer
-	a:setcapacity(n) -> ok?                     `a.capacity = n` with error checking
 
 	a:set(i,t) -> i                             grow array to i and set value at i
 	a:set(i) -> &t                              grow array to i and get address at i
@@ -117,26 +117,24 @@ local function arr_type(T, cmp, size_t)
 		end
 
 		terra arr:setcapacity(capacity: size_t): bool
-			assert(capacity >= 0)
+			assert(capacity >= self.view.len)
 			if capacity == self.capacity then return true end
 			if capacity == 0 then self:free(); return true end
 			if self.capacity == 0 and self.elements ~= nil then return false end
 			--^the view was assigned by the user (elements are not owned).
-			var len = self.len
-			var elements = alloc(T, capacity, self.elements)
+			var elements = realloc(self.elements, capacity)
 			if elements == nil then return false end
 			self.view.elements = elements
 			self._capacity = capacity
-			self.view.len = min(capacity, len)
 			return true
 		end
 
 		terra arr:set_capacity(capacity: size_t)
-			assert(self:setcapacity(capacity))
+			assert(self:setcapacity(max(self.len, capacity)))
 		end
 
 		terra arr:set_min_capacity(capacity: size_t)
-			assert(self:setcapacity(max(nextpow2(capacity), self.capacity)))
+			assert(self:setcapacity(max(self.capacity, nextpow2(capacity))))
 		end
 
 		terra arr:set_len(len: size_t)
