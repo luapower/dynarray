@@ -112,7 +112,7 @@ local function arr_type(T, cmp, size_t)
 		terra arr:free()
 			if self.capacity == 0 and self.elements ~= nil then return end
 			--^the view was assigned by the user (elements are not owned).
-			memfree(self.view.elements)
+			realloc(self.elements, 0)
 			self:init()
 		end
 
