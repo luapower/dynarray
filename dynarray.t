@@ -63,8 +63,8 @@ local function arr_type(T, cmp, size_t)
 	local view = arrview(T, cmp, size_t)
 
 	local struct arr (gettersandsetters) {
-		_capacity: size_t;
 		view: view;
+		_capacity: size_t;
 	}
 
 	arr.view = view
