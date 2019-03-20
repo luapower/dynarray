@@ -15,7 +15,7 @@
 	var a = A(&a)                               copy constructor from array
 
 	a:init()                                    initialize (for struct members)
-	a:free()                                    free elements buffer
+	a:free()                                    free buffer (but not the items!)
 	a:setcapacity(n) -> ok?                     `a.capacity = n` with error checking
 
 	var a = A(rawstring|'string constant')      cast from C string
@@ -162,13 +162,13 @@ local function arr_type(T, cmp, size_t)
 		--creating a hole of uninitialized elements.
 		arr.methods.set = overload'set'
 		arr.methods.set:adddefinition(terra(self: &arr, i: size_t, val: T)
-			if i < 0 then i = self.len + i end; assert(i >= 0)
+			assert(i >= 0)
 			self.min_len = i+1
 			self.elements[i] = val
 			return i
 		end)
 		arr.methods.set:adddefinition(terra(self: &arr, i: size_t)
-			if i < 0 then i = self.len + i end; assert(i >= 0)
+			assert(i >= 0)
 			self.min_len = i+1
 			return self.elements+i
 		end)
@@ -302,9 +302,13 @@ local function arr_type(T, cmp, size_t)
 			end)
 		end
 
-		terra arr:__memsize(): size_t
+		terra arr:__memsize()
 			return sizeof(arr) + sizeof(T) * self.len
 		end
+
+		setinlined(arr.methods, function(name)
+			return name ~= 'setcapacty'
+		end)
 
 	end) --addmethods()
 
