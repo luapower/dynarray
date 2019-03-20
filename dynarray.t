@@ -28,7 +28,7 @@
 	a.min_len                                   (write/only) grow array
 	a.min_capacity                              (write/only) grow capacity
 
-	a:set(i,t) -> i                             grow array to i and set value at i
+	a:set(i,t) -> &t                            grow array to i and set value at i
 	a:set(i) -> &t                              grow array to i and get address at i
 
 	a:push|add() -> &t                          a:set(self.len)
@@ -161,16 +161,13 @@ local function arr_type(T, cmp, size_t)
 		--unlike view:set(), arr:set() grows the array automatically, possibly
 		--creating a hole of uninitialized elements.
 		arr.methods.set = overload'set'
-		arr.methods.set:adddefinition(terra(self: &arr, i: size_t, val: T)
-			assert(i >= 0)
-			self.min_len = i+1
-			self.elements[i] = val
-			return i
-		end)
 		arr.methods.set:adddefinition(terra(self: &arr, i: size_t)
 			assert(i >= 0)
 			self.min_len = i+1
 			return self.elements+i
+		end)
+		arr.methods.set:adddefinition(terra(self: &arr, i: size_t, val: T)
+			var e = self:set(i); @e = val; return e
 		end)
 
 		arr.methods.push = overload'push'
@@ -188,11 +185,10 @@ local function arr_type(T, cmp, size_t)
 
 		--shifting segments to the left or to the right
 
-		--returns the absolute i because if i was negative, it is now invalid.
 		--note: not overloading insert() here because of ambiguity with
 		--insert(i,T) when T=size_t.
 		terra arr:insertn(i: size_t, n: size_t)
-			if i < 0 then i = self.len + i end; assert(i >= 0)
+			assert(i >= 0)
 			assert(n >= 0)
 			var b = max(0, self.len-i) --how many elements must be moved
 			self.min_len = i+n+b
@@ -236,10 +232,9 @@ local function arr_type(T, cmp, size_t)
 			return self:insert(self.len, a)
 		end)
 
-		--returns the absolute i because if i was negative, it is now invalid.
 		arr.methods.remove = overload'remove'
 		arr.methods.remove:adddefinition(terra(self: &arr, i: size_t, n: size_t)
-			if i < 0 then i = self.len + i end; assert(i >= 0)
+			assert(i >= 0)
 			assert(n >= 0)
 			var b = self.len-i-n --how many elements must be moved
 			if b > 0 then
@@ -273,7 +268,7 @@ local function arr_type(T, cmp, size_t)
 
 		terra arr:move(i0: size_t, i: size_t)
 			i0 = self.view:index(i0)
-			if i < 0 then i = self.len + i end; assert(i >= 0)
+			assert(i >= 0)
 			if i ~= i0 then
 				var tmp = self.view(i0)
 				self:remove(i0)
