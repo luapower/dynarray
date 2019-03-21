@@ -10,7 +10,7 @@
 	var a =   arr{T=,[cmp=],[size_t=int]}       create a value from Terra
 	var a =   arr(T, [cmp=],[size_t=int])       create a value from Terra
 	var a =   arr(T, elements, len[,...])       create a value from Terra
-	var a = A(nil)                              nil-cast (for use in constant())
+	var a = A(nil)                              nil-cast (for use in global())
 	var a = A(&v)                               copy constructor from view
 	var a = A(&a)                               copy constructor from array
 
@@ -36,7 +36,7 @@
 	a:push|add(&t,n) -> i                       a:insert(self.len, &T, n)
 	a:push|add(&v) -> i                         a:insert(self.len, &v)
 	a:push|add(&a) -> i                         a:insert(self.len, &a)
-	a:pop() -> i                                dec(self.len)
+	a:pop() -> v                                remove top value and return a copy
 
 	a:insertn(i,n) -> i                         make room for n elements at i
 	a:insert(i) -> &t                           make room at i and return address
@@ -44,8 +44,9 @@
 	a:insert(i,&t,n) -> i                       insert buffer at i
 	a:insert(i,&v) -> i                         insert arrayview at i
 	a:insert(i,&a) -> i                         insert dynarray at i
+	a:remove() -> i                             remove top element
 	a:remove(i,[n]) -> i                        remove n elements starting at i
-	a:remove(&t[,default]) -> i                 remove element at address
+	a:remove(&t) -> i                           remove element at address
 
 	a:copy() -> &a                              copy to new array
 	a:move(i, new_i)                            move element to new position
@@ -180,7 +181,11 @@ local function arr_type(T, cmp, size_t)
 		arr.methods.add = arr.methods.push
 
 		terra arr:pop()
-			return dec(self.len)
+			var i = self.len-1
+			assert(i >= 0)
+			var val = self.elements[i]
+			self.view.len = i
+			return val
 		end
 
 		--shifting segments to the left or to the right
@@ -246,11 +251,11 @@ local function arr_type(T, cmp, size_t)
 		arr.methods.remove:adddefinition(terra(self: &arr, i: size_t)
 			return self:remove(i, 1)
 		end)
+		arr.methods.remove:adddefinition(terra(self: &arr)
+			return self:remove(self.len-1, 1)
+		end)
 		arr.methods.remove:adddefinition(terra(self: &arr, e: &T)
 			return self:remove(self.view:index(e))
-		end)
-		arr.methods.remove:adddefinition(terra(self: &arr, e: &T, default: size_t)
-			return self:remove(self.view:index(e, default))
 		end)
 
 		arr.methods.copy = overload'copy'
