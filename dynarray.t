@@ -5,10 +5,10 @@
 
 	A dynamic array is a typed interface over realloc().
 
-	local A = arr{T=,[cmp=],[size_t=int]}       create a type from Lua
-	local A = arr(T, [cmp=],[size_t=int])       create a type from Lua
-	var a =   arr{T=,[cmp=],[size_t=int]}       create a value from Terra
-	var a =   arr(T, [cmp=],[size_t=int])       create a value from Terra
+	local A = arr{T=,[size_t=int],[cmp=]}       create a type from Lua
+	local A = arr(T, [size_t=int],[cmp])        create a type from Lua
+	var a =   arr{T=,[size_t=int],[cmp=]}       create a value from Terra
+	var a =   arr(T, [size_t=int],[cmp])        create a value from Terra
 	var a =   arr(T, elements, len[,...])       create a value from Terra
 	var a = A(nil)                              nil-cast (for use in global())
 	var a = A(&v)                               copy constructor from view
@@ -59,9 +59,9 @@ if not ... then require'dynarray_test'; return end
 
 setfenv(1, require'low')
 
-local function arr_type(T, cmp, size_t)
+local function arr_type(T, size_t, cmp)
 
-	local view = arrview(T, cmp, size_t)
+	local view = arrview(T, size_t, cmp)
 
 	local struct arr (gettersandsetters) {
 		view: view;
@@ -326,31 +326,31 @@ local function arr_type(T, cmp, size_t)
 end
 arr_type = memoize(arr_type)
 
-local arr_type = function(T, cmp, size_t)
+local arr_type = function(T, size_t, cmp)
 	if terralib.type(T) == 'table' then
-		T, cmp, size_t = T.T, T.cmp, T.size_t
+		T, size_t, cmp = T.T, T.size_t, T.cmp
 	end
 	assert(T)
-	cmp = cmp or (T.getmethod and T:getmethod'__cmp')
 	size_t = size_t or int
-	return arr_type(T, cmp, size_t)
+	cmp = cmp or (T.getmethod and T:getmethod'__cmp')
+	return arr_type(T, size_t, cmp)
 end
 
-return macro(
+low.arr = macro(
 	--calling it from Terra returns a new array.
 	function(arg1, ...)
-		local T, lval, len, cmp, size_t
+		local T, lval, len, size_t, cmp
 		if arg1 and arg1:islvalue() then --wrap raw pointer: arr(&t, len, ...)
-			lval, len, cmp, size_t = arg1, ...
+			lval, len, size_t, cmp = arg1, ...
 			T = lval:gettype()
 			assert(T:ispointer())
 			T = T.type
 		else --create new array: arr(T, ...)
-			T, cmp, size_t = arg1, ...
+			T, size_t, cmp = arg1, ...
 			T = T and T:astype()
 		end
 		size_t = size_t and size_t:astype()
-		local arr = arr_type(T, cmp, size_t)
+		local arr = arr_type(T, size_t, cmp)
 		if lval then
 			return quote var a = arr(nil); a:add(lval, len) in a end
 		else

@@ -40,7 +40,7 @@ end
 local terra test_dynarray()
 	var a: arr(int); a:init()
 	var a2 = arr(int)
-	var a3 = new([arr(int)])
+	var a3 = alloc([arr(int)])
 	a:set(15, 1234)
 	print(a.capacity, a.len, a(15))
 	a:set(19, 4321)
@@ -77,7 +77,7 @@ end
 
 local terra test_wrap()
 	var len = 10
-	var buf = new(int8, len)
+	var buf = alloc(int8, len); fill(buf, len)
 	buf[5] = 123
 	var a = arr(buf, len)
 	assert(a(5) == 123)
