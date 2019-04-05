@@ -5,6 +5,12 @@
 
 	A dynamic array is a typed interface over realloc().
 
+	When the array owns its elements (noown=false, the default) elem:free()
+	is called on each element that gets removed or replaced. This brings about
+	the necessity to initialize all elements that are implicitly created by
+	setting len, calling insertn() or calling set(i) when i >= len, otherwise
+	free() will be called on uninitialized elements!
+
 	local A = arr{T=,[size_t=int],[cmp=]}       create a type from Lua
 	local A = arr(T, [size_t=int],[cmp])        create a type from Lua
 	var a =   arr{T=,[size_t=int],[cmp=]}       create a value from Terra
@@ -14,7 +20,8 @@
 	var a = A(&v)                               copy constructor from view
 	var a = A(&a)                               copy constructor from array
 
-	a:init()                                    initialize (for struct members)
+	a:init() | fill(&a)                         initialize (for struct members)
+
 	a:free()                                    free buffer (but not the items!)
 	a:setcapacity(n) -> ok?                     `a.capacity = n` with error checking
 
@@ -28,7 +35,9 @@
 	a.min_len                                   (write/only) grow array
 	a.min_capacity                              (write/only) grow capacity
 
-	a:set(i,t) -> &t                            grow array to i and set value at i
+	a.noown                                     (read/write) doesn't own the elements
+
+	a:set(i,t) -> &t                            grow array to i and replace value at i
 	a:set(i) -> &t                              grow array to i and get address at i
 
 	a:push|add() -> &t                          a:set(self.len)
@@ -44,9 +53,9 @@
 	a:insert(i,&t,n) -> i                       insert buffer at i
 	a:insert(i,&v) -> i                         insert arrayview at i
 	a:insert(i,&a) -> i                         insert dynarray at i
-	a:remove() -> i                             remove top element
-	a:remove(i,[n]) -> i                        remove n elements starting at i
-	a:remove(&t) -> i                           remove element at address
+	a:remove() -> i                             remove/free top element
+	a:remove(i,[n]) -> i                        remove/free n elements starting at i
+	a:remove(&t) -> i                           remove/free element at address
 
 	a:copy() -> &a                              copy to new array
 	a:move(i, new_i)                            move element to new position
@@ -66,10 +75,12 @@ local function arr_type(T, size_t, cmp)
 	local struct arr (gettersandsetters) {
 		view: view;
 		_capacity: size_t;
+		noown: bool; --not calling free() on removed elements
 	}
 
 	arr.view = view
-	arr.empty = `arr{_capacity = 0; view = view(nil)}
+	arr.empty = `arr{view = view(nil); _capacity = 0; noown = false}
+	arr.empty_noown = `arr{view = view(nil); _capacity = 0; noown = true}
 
 	function arr.metamethods.__typename(self)
 		return 'arr('..tostring(T)..')'
@@ -113,6 +124,9 @@ local function arr_type(T, size_t, cmp)
 		terra arr:free()
 			if self.capacity == 0 and self.elements ~= nil then return end
 			--^the view was assigned by the user (elements are not owned).
+			if not self.noown then
+				self:call'free'
+			end
 			realloc(self.elements, 0)
 			self:init()
 		end
@@ -135,12 +149,20 @@ local function arr_type(T, size_t, cmp)
 		end
 
 		terra arr:set_min_capacity(capacity: size_t)
-			assert(self:setcapacity(max(self.capacity, nextpow2(capacity))))
+			capacity = nextpow2(capacity)
+			assert(self:setcapacity(max(self.capacity, capacity)))
 		end
 
 		terra arr:set_len(len: size_t)
 			assert(len >= 0)
 			self.min_capacity = len
+			if cancall(T, 'free') and not self.noown then
+				if len < self.len then --shrink
+					for i = len, self.len do
+						call(self.elements[i], 'free')
+					end
+				end
+			end
 			self.view.len = len
 		end
 
@@ -168,7 +190,12 @@ local function arr_type(T, size_t, cmp)
 			return self.elements+i
 		end)
 		arr.methods.set:adddefinition(terra(self: &arr, i: size_t, val: T)
-			var e = self:set(i); @e = val; return e
+			if cancall(T, 'free') and not self.noown and i < self.len then
+				call(self:at(i), 'free')
+			end
+			var e = self:set(i)
+			@e = val
+			return e
 		end)
 
 		arr.methods.push = overload'push'
@@ -241,6 +268,11 @@ local function arr_type(T, size_t, cmp)
 		arr.methods.remove:adddefinition(terra(self: &arr, i: size_t, n: size_t)
 			assert(i >= 0)
 			assert(n >= 0)
+			if cancall(T, 'free') and not self.noown then
+				for i = i, min(self.len, i+n) do
+					call(self.elements[i], 'free')
+				end
+			end
 			var b = self.len-i-n --how many elements must be moved
 			if b > 0 then
 				copy(self.elements+i, self.elements+i+n, b)
@@ -303,7 +335,7 @@ local function arr_type(T, size_t, cmp)
 		end
 
 		terra arr:__memsize()
-			return sizeof(arr) + sizeof(T) * self.len
+			return sizeof(T) * self.len
 		end
 
 		setinlined(arr.methods, function(name)

@@ -1,6 +1,55 @@
 
 setfenv(1, require'low')
 
+local struct S {x: int}
+local p = global(int, 0)
+local n = global(int, 0)
+terra S:init() p = p + 1 end
+terra S:free() n = n + 1 end
+local terra test_own()
+	var a = arr(S)
+	a:add(S{})
+	a:add(S{})
+	a.len = 5
+	a:free()
+	assert(n == 5)
+	assert(p == 0) --init() wasn't called
+end
+test_own()
+
+local cmp = terra(a: &int, b: &int): int32
+	return iif(@a < @b, -1, iif(@a > @b, 1, 0))
+end
+
+local terra test_dynarray()
+	var a0 = arr(int); a0:free() --test the macro
+	var a: arr(int); a:init()
+	a:set(15, 1234) --sparse array
+	assert(a(15) == 1234)
+	assert(a.len == 16)
+	assert(a.capacity >= a.len)
+	a:set(19, 4321)
+	assert(a(19) == 4321)
+	var x = -1
+	for i,v in a:sub(0, 15) do
+		@v = x
+		x = x * 2
+	end
+	x = 2000
+	for i,v in a:sub(16, 19) do
+		@v = x
+		x = x + 100
+	end
+	a:sort(cmp)
+	--for i,v in a do print(i, @v) end
+	assert(a:binsearch(-maxint) == 0)
+	assert(a:binsearch(maxint) == a.len)
+	assert(a:binsearch(1234) == 15)
+	assert(a:binsearch(4321) == 19)
+	a:free()
+end
+test_dynarray()
+
 local terra test_forward_methods()
 	var a = arr(int)
 	assert(a:at(0, nil) == nil)
@@ -33,47 +82,20 @@ local terra test_stack()
 end
 test_stack()
 
-local cmp = terra(a: &int, b: &int): int32
-	return iif(@a < @b, -1, iif(@a > @b, 1, 0))
-end
-
-local terra test_dynarray()
-	var a: arr(int); a:init()
-	var a2 = arr(int)
-	var a3 = alloc([arr(int)])
-	a:set(15, 1234)
-	print(a.capacity, a.len, a(15))
-	a:set(19, 4321)
-	assert(a(19) == 4321)
-	var x = -1
-	for i,v in a:sub(5, 12) do
-		@v = x
-		x = x * 2
-	end
-	a:sort(cmp)
-	for i,v in a do
-		print(i, @v)
-	end
-	assert(a:binsearch(-maxint) == 0)
-	assert(a:binsearch(5000) == 15)
-	assert(a:binsearch(maxint) == a.len)
-	a:free()
-end
-
 local S = arr(int8)
 local terra test_arrayofstrings()
 	var a = arr(S)
 	var s = S'Hello'
 	a:add(s)
 	a:add(S'World!')
-	print(a.len, a(0), a(1))
-	a.view:call'free'
+	a:call'free'
 	assert(a(0).capacity == 0)
 	assert(a(0).len == 0)
 	a:free()
 	assert(a.capacity == 0)
 	assert(a.len == 0)
 end
+test_arrayofstrings()
 
 local terra test_wrap()
 	var len = 10
@@ -81,27 +103,10 @@ local terra test_wrap()
 	buf[5] = 123
 	var a = arr(buf, len)
 	assert(a(5) == 123)
+	a:free()
+
 	var s = tostring('hello')
 	print(s.len, s.elements)
 	s:free()
-	a:free()
 end
-
-local terra test_hashmap()
-	var s1 = S'Hello'
-	var s2 = S'World!'
-	var h = map(S, int)
-	h:set(s1, 5)
-	h:set(s2, 7)
-	h:set(s2, 8)
-	h:set(s1, 3)
-	print(@h:at(s2), @h:at(s1), h.count)
-	h:free()
-	s1:free()
-	s2:free()
-end
-
-test_dynarray()
-test_arrayofstrings()
 test_wrap()
-test_hashmap()
