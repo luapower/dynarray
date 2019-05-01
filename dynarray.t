@@ -5,16 +5,16 @@
 
 	A dynamic array is a typed interface over realloc().
 
-	When the array owns its elements (noown=false, the default) elem:free()
-	is called on each element that gets removed or replaced. This brings about
-	the necessity to initialize all elements that are implicitly created by
-	setting len, calling insertn() or calling set(i) when i >= len, otherwise
-	free() will be called on uninitialized elements!
+	When the array owns its elements (own_elements ~= false, the default),
+	elem:free() is called on each element that gets removed or replaced. This
+	brings about the necessity to initialize all elements that are implicitly
+	created by setting len, calling insertn() or calling set(i) when i >= len,
+	otherwise free() will be called on uninitialized elements!
 
-	local A = arr{T=,[size_t=int],[cmp=]}       create a type from Lua
-	local A = arr(T, [size_t=int],[cmp])        create a type from Lua
-	var a =   arr{T=,[size_t=int],[cmp=]}       create a value from Terra
-	var a =   arr(T, [size_t=int],[cmp])        create a value from Terra
+	local A = arr{T=,...}                       create a type from Lua
+	local A = arr(T, [size_t=int])              create a type from Lua
+	var a =   arr{T=,...}                       create a value from Terra
+	var a =   arr(T, [size_t=int])              create a value from Terra
 	var a =   arr(T, elements, len[,...])       create a value from Terra
 	var a = A(nil)                              nil-cast (for use in global())
 	var a = A(&v)                               copy constructor from view
@@ -35,10 +35,10 @@
 	a.min_len                                   (write/only) grow array
 	a.min_capacity                              (write/only) grow capacity
 
-	a.noown                                     (read/write) doesn't own the elements
-
-	a:set(i,t) -> &t                            grow array to i and replace value at i
-	a:set(i) -> &t                              grow array to i and get address at i
+	a:set(i,t) -> &t                            replace value at i
+	a:set(i) -> &t                              free value at i and get address at i
+	a:set(i,t,empty_t) -> &t                    grow array to i and replace value
+	a:getat(i,empty_t) -> &t                    grow array to i, free value at i and get address
 
 	a:push|add() -> &t                          a:set(self.len)
 	a:push|add(t) -> i                          a:set(self.len, t)
@@ -68,19 +68,18 @@ if not ... then require'dynarray_test'; return end
 
 setfenv(1, require'low')
 
-local function arr_type(T, size_t, cmp)
+local function arr_type(T, size_t, context_t, cmp, own_elements)
 
 	local view = arrview(T, size_t, cmp)
 
 	local struct arr (gettersandsetters) {
 		view: view;
 		_capacity: size_t;
-		noown: bool; --not calling free() on removed elements
+		context: context_t;
 	}
 
 	arr.view = view
-	arr.empty = `arr{view = view(nil); _capacity = 0; noown = false}
-	arr.empty_noown = `arr{view = view(nil); _capacity = 0; noown = true}
+	arr.empty = `arr{view = nil; _capacity = 0}
 
 	function arr.metamethods.__typename(self)
 		return 'arr('..tostring(T)..')'
@@ -117,22 +116,43 @@ local function arr_type(T, size_t, cmp)
 
 	addmethods(arr, function()
 
-		terra arr:init()
-			@self = [arr.empty]
+		if context_t ~= tuple() then
+			terra arr:init(context: context_t)
+				@self = [arr.empty]
+				self.context = context
+			end
+			terra arr:free_element(i: size_t)
+				call(&self.elements[i], 'free', 1, self.context)
+			end
+		else
+			terra arr:init()
+				@self = [arr.empty]
+			end
+			terra arr:free_element(i: size_t)
+				call(&self.elements[i], 'free')
+			end
+		end
+
+		terra arr:free_elements()
+			for i = 0, self.len do
+				self:free_element(i)
+			end
 		end
 
 		terra arr:free()
 			if self.capacity == 0 and self.elements ~= nil then return end
 			--^the view was assigned by the user (elements are not owned).
-			if not self.noown then
-				self:call'free'
+			if own_elements then
+				self:free_elements()
 			end
-			realloc(self.elements, 0)
-			self:init()
+			realloc(self.view.elements, 0)
+			self.view.elements = nil
+			self.view.len = 0
+			self._capacity = 0
 		end
 
 		terra arr:setcapacity(capacity: size_t): bool
-			assert(capacity >= self.view.len)
+			assert(capacity >= self.len)
 			if capacity == self.capacity then return true end
 			if capacity == 0 then self:free(); return true end
 			if self.capacity == 0 and self.elements ~= nil then return false end
@@ -156,10 +176,10 @@ local function arr_type(T, size_t, cmp)
 		terra arr:set_len(len: size_t)
 			assert(len >= 0)
 			self.min_capacity = len
-			if cancall(T, 'free') and not self.noown then
+			if own_elements and cancall(T, 'free') then
 				if len < self.len then --shrink
 					for i = len, self.len do
-						call(self.elements[i], 'free')
+						self:free_element(i)
 					end
 				end
 			end
@@ -181,29 +201,59 @@ local function arr_type(T, size_t, cmp)
 
 		--setting, pushing and popping elements
 
-		--unlike view:set(), arr:set() grows the array automatically, possibly
-		--creating a hole of uninitialized elements.
 		arr.methods.set = overload'set'
 		arr.methods.set:adddefinition(terra(self: &arr, i: size_t)
-			assert(i >= 0)
-			self.min_len = i+1
-			return self.elements+i
+			assert(i >= 0 and i < self.len)
+			if own_elements and cancall(T, 'free') then
+				self:free_element(i)
+			end
+			return &self.elements[i]
 		end)
 		arr.methods.set:adddefinition(terra(self: &arr, i: size_t, val: T)
-			if cancall(T, 'free') and not self.noown and i < self.len then
-				call(self:at(i), 'free')
-			end
 			var e = self:set(i)
 			@e = val
 			return e
 		end)
+		--set variant that grows the array automatically, filling the gap with empty_val.
+		arr.methods.set:adddefinition(terra(self: &arr, i: size_t, val: T, empty_val: T)
+			if i >= self.len then
+				var j = self.len
+				self.len = i+1
+				for j = j, i do --fill the gap
+					self.elements[j] = empty_val
+				end
+				var e = &self.elements[i]
+				@e = val
+				return e
+			else
+				return self:set(i, val)
+			end
+		end)
+
+		--TODO: find a better name for this pattern
+		arr.methods.getat = overload'getat'
+		arr.methods.getat:adddefinition(terra(self: &arr, i: size_t, empty_val: T)
+			if i >= self.len then
+				var j = self.len
+				self.len = i+1
+				for j = j, i+1 do --fill the gap, plus the last element
+					self.elements[j] = empty_val
+				end
+			else
+				assert(i >= 0)
+			end
+			return &self.elements[i]
+		end)
 
 		arr.methods.push = overload'push'
-		arr.methods.push:adddefinition(terra(self: &arr, val: T)
-			return self:set(self.len, val)
-		end)
 		arr.methods.push:adddefinition(terra(self: &arr)
-			return self:set(self.len)
+			self.len = self.len + 1
+			return &self.elements[self.len-1]
+		end)
+		arr.methods.push:adddefinition(terra(self: &arr, val: T)
+			var e = self:push()
+			@e = val
+			return e
 		end)
 		arr.methods.add = arr.methods.push
 
@@ -268,9 +318,9 @@ local function arr_type(T, size_t, cmp)
 		arr.methods.remove:adddefinition(terra(self: &arr, i: size_t, n: size_t)
 			assert(i >= 0)
 			assert(n >= 0)
-			if cancall(T, 'free') and not self.noown then
+			if own_elements and cancall(T, 'free') then
 				for i = i, min(self.len, i+n) do
-					call(self.elements[i], 'free')
+					self:free_element(i)
 				end
 			end
 			var b = self.len-i-n --how many elements must be moved
@@ -358,31 +408,35 @@ local function arr_type(T, size_t, cmp)
 end
 arr_type = memoize(arr_type)
 
-local arr_type = function(T, size_t, cmp)
+local arr_type = function(T, size_t)
+	local context_t, cmp, own_elements
 	if terralib.type(T) == 'table' then
-		T, size_t, cmp = T.T, T.size_t, T.cmp
+		T, size_t, context_t, cmp, own_elements =
+			T.T, T.size_t, T.context_t, T.cmp, T.own_elements
 	end
 	assert(T)
 	size_t = size_t or int
-	cmp = cmp or (T.getmethod and T:getmethod'__cmp')
-	return arr_type(T, size_t, cmp)
+	context_t = context_t or tuple()
+	cmp = cmp or getmethod(T, '__cmp')
+	own_elements = own_elements ~= false
+	return arr_type(T, size_t, context_t, cmp, own_elements)
 end
 
 low.arr = macro(
 	--calling it from Terra returns a new array.
 	function(arg1, ...)
-		local T, lval, len, size_t, cmp
+		local T, lval, len, size_t
 		if arg1 and arg1:islvalue() then --wrap raw pointer: arr(&t, len, ...)
-			lval, len, size_t, cmp = arg1, ...
+			lval, len, size_t = arg1, ...
 			T = lval:gettype()
 			assert(T:ispointer())
 			T = T.type
 		else --create new array: arr(T, ...)
-			T, size_t, cmp = arg1, ...
+			T, size_t = arg1, ...
 			T = T and T:astype()
 		end
 		size_t = size_t and size_t:astype()
-		local arr = arr_type(T, size_t, cmp)
+		local arr = arr_type(T, size_t)
 		if lval then
 			return quote var a = arr(nil); a:add(lval, len) in a end
 		else

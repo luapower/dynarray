@@ -24,11 +24,11 @@ end
 local terra test_dynarray()
 	var a0 = arr(int); a0:free() --test the macro
 	var a: arr(int); a:init()
-	a:set(15, 1234) --sparse array
+	a:set(15, 1234, 0) --sparse array
 	assert(a(15) == 1234)
 	assert(a.len == 16)
 	assert(a.capacity >= a.len)
-	a:set(19, 4321)
+	a:set(19, 4321, 0)
 	assert(a(19) == 4321)
 	var x = -1
 	for i,v in a:sub(0, 15) do
@@ -60,7 +60,7 @@ test_forward_methods()
 local terra test_autogrow()
 	var a = arr(int)
 	for i = 0,10000 do
-		a:set(i, i)
+		a:set(i, i, 0)
 	end
 	assert(a.len == 10000)
 	assert(a.capacity == 16384)
