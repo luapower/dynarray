@@ -75,7 +75,7 @@ local function arr_type(T, size_t, context_t, cmp, own_elements)
 	local struct arr (gettersandsetters) {
 		view: view;
 		_capacity: size_t;
-		context: context_t;
+		context: context_t or tuple();
 	}
 
 	arr.view = view
@@ -116,7 +116,7 @@ local function arr_type(T, size_t, context_t, cmp, own_elements)
 
 	addmethods(arr, function()
 
-		if context_t ~= tuple() then
+		if context_t then
 			terra arr:init(context: context_t)
 				@self = [arr.empty]
 				self.context = context
@@ -416,7 +416,7 @@ local arr_type = function(T, size_t)
 	end
 	assert(T)
 	size_t = size_t or int
-	context_t = context_t or tuple()
+	context_t = context_t or nil
 	cmp = cmp or getmethod(T, '__cmp')
 	own_elements = own_elements ~= false
 	return arr_type(T, size_t, context_t, cmp, own_elements)
