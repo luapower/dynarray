@@ -6,10 +6,7 @@
 	A dynamic array is a typed interface over realloc().
 
 	When the array owns its elements (own_elements ~= false, the default),
-	elem:free() is called on each element that gets removed or replaced. This
-	brings about the necessity to initialize all elements that are implicitly
-	created by setting len, calling insertn() or calling set(i) when i >= len,
-	otherwise free() will be called on uninitialized elements!
+	elem:free() is called on each element that gets removed or replaced.
 
 	local A = arr{T=,...}                       create a type from Lua
 	local A = arr(T, [size_t=int])              create a type from Lua
@@ -22,7 +19,7 @@
 
 	a:init() | fill(&a)                         initialize (for struct members)
 
-	a:free()                                    free buffer (but not the items!)
+	a:free()                                    free the elements and free the array
 	a:setcapacity(n) -> ok?                     `a.capacity = n` with error checking
 
 	var a = A(rawstring|'string constant')      cast from C string
@@ -31,34 +28,37 @@
 	a.view                                      (read/only) arr's arrayview
 	a.elements                                  (read/only) array elements
 	a.len                                       (read/write) array length
+	a:setlen(len) -> new_elems                  set length and return new elements view
+	a:setlen(len,empty_t)                       set length and set new elements
 	a.capacity                                  (read/write) array capacity
 	a.min_len                                   (write/only) grow array
 	a.min_capacity                              (write/only) grow capacity
 
-	a:set(i,t) -> &t                            replace value at i
-	a:set(i) -> &t                              free value at i and get address at i
-	a:set(i,t,empty_t) -> &t                    grow array to i and replace value
-	a:getat(i,empty_t) -> &t                    grow array to i, free value at i and get address
+	a:set(i,t) -> &t                            replace value
+	a:set(i) -> &t                              free value and get its address
+	a:set(i,t,empty_t) -> &t                    grow array and set value or replace value
+	a:getat(i,empty_t) -> &t                    grow array or free value and get address
 
-	a:push|add() -> &t                          a:set(self.len)
-	a:push|add(t) -> i                          a:set(self.len, t)
-	a:push|add(&t,n) -> i                       a:insert(self.len, &T, n)
+	a:push|add() -> &t                          a:insert(self.len)
+	a:push|add(t) -> i                          a:insert(self.len, t)
+	a:push|add(&t,n) -> i                       a:insert(self.len, &t, n)
 	a:push|add(&v) -> i                         a:insert(self.len, &v)
 	a:push|add(&a) -> i                         a:insert(self.len, &a)
-	a:pop() -> v                                remove top value and return a copy
+	a:pop() -> t                                remove top value and return a copy
 
-	a:insertn(i,n) -> i                         make room for n elements at i
+	a:insertn(i,n)                              make room for n elements at i
+	a:insertn(i,n,empty_t)                      grow array or make room for n elements
 	a:insert(i) -> &t                           make room at i and return address
-	a:insert(i,t) -> i                          insert element at i
-	a:insert(i,&t,n) -> i                       insert buffer at i
-	a:insert(i,&v) -> i                         insert arrayview at i
-	a:insert(i,&a) -> i                         insert dynarray at i
-	a:remove() -> i                             remove/free top element
-	a:remove(i,[n]) -> i                        remove/free n elements starting at i
-	a:remove(&t) -> i                           remove/free element at address
+	a:insert(i,t)                               insert element at i
+	a:insert(i,&t,n)                            insert buffer at i
+	a:insert(i,&v)                              insert arrayview at i
+	a:insert(i,&a)                              insert dynarray at i
+	a:remove() -> i                             free & remove top element
+	a:remove(i,[n])                             free & remove n elements starting at i
+	a:remove(&t) -> i                           free & remove element at address
 
 	a:copy() -> &a                              copy to new array
-	a:move(i, new_i)                            move element to new position
+	a:move(i0,i1)                               move element to new position
 
 	a:METHOD(...) -> a.view:METHOD(...)         call a method of a.view through a
 
@@ -116,20 +116,22 @@ local function arr_type(T, size_t, context_t, cmp, own_elements)
 
 	addmethods(arr, function()
 
+		own_elements = own_elements and cancall(T, 'free')
+
 		if context_t ~= tuple() then
 			terra arr:init(context: context_t)
 				@self = [arr.empty]
 				self.context = context
 			end
 			terra arr:free_element(i: size_t)
-				call(&self.elements[i], 'free', 1, self.context)
+				call(self.elements[i], 'free', 1, self.context)
 			end
 		else
 			terra arr:init()
 				@self = [arr.empty]
 			end
 			terra arr:free_element(i: size_t)
-				call(&self.elements[i], 'free')
+				call(self.elements[i], 'free')
 			end
 		end
 
@@ -176,7 +178,7 @@ local function arr_type(T, size_t, context_t, cmp, own_elements)
 		terra arr:set_len(len: size_t)
 			assert(len >= 0)
 			self.min_capacity = len
-			if own_elements and cancall(T, 'free') then
+			if own_elements then
 				if len < self.len then --shrink
 					for i = len, self.len do
 						self:free_element(i)
@@ -185,6 +187,18 @@ local function arr_type(T, size_t, context_t, cmp, own_elements)
 			end
 			self.view.len = len
 		end
+
+		arr.methods.setlen = overload'setlen'
+		arr.methods.setlen:adddefinition(terra(self: &arr, len: size_t)
+			var len0 = self.len
+			self.len = len
+			return self.view:sub(len0)
+		end)
+		arr.methods.setlen:adddefinition(terra(self: &arr, len: size_t, empty_val: T)
+			for _,e in self:setlen(len) do
+				@e = empty_val
+			end
+		end)
 
 		terra arr:set_min_len(len: size_t)
 			self.len = max(len, self.len)
@@ -204,7 +218,7 @@ local function arr_type(T, size_t, context_t, cmp, own_elements)
 		arr.methods.set = overload'set'
 		arr.methods.set:adddefinition(terra(self: &arr, i: size_t)
 			assert(i >= 0 and i < self.len)
-			if own_elements and cancall(T, 'free') then
+			if own_elements then
 				self:free_element(i)
 			end
 			return &self.elements[i]
@@ -216,10 +230,10 @@ local function arr_type(T, size_t, context_t, cmp, own_elements)
 		end)
 		--set variant that grows the array automatically, filling the gap with empty_val.
 		arr.methods.set:adddefinition(terra(self: &arr, i: size_t, val: T, empty_val: T)
-			if i >= self.len then
+			if i >= self.len then --fill the gap
 				var j = self.len
 				self.len = i+1
-				for j = j, i do --fill the gap
+				for j = j, i do
 					self.elements[j] = empty_val
 				end
 				var e = &self.elements[i]
@@ -233,10 +247,10 @@ local function arr_type(T, size_t, context_t, cmp, own_elements)
 		--TODO: find a better name for this pattern
 		arr.methods.getat = overload'getat'
 		arr.methods.getat:adddefinition(terra(self: &arr, i: size_t, empty_val: T)
-			if i >= self.len then
+			if i >= self.len then --fill the gap, plus the last element
 				var j = self.len
 				self.len = i+1
-				for j = j, i+1 do --fill the gap, plus the last element
+				for j = j, i+1 do
 					self.elements[j] = empty_val
 				end
 			else
@@ -247,13 +261,15 @@ local function arr_type(T, size_t, context_t, cmp, own_elements)
 
 		arr.methods.push = overload'push'
 		arr.methods.push:adddefinition(terra(self: &arr)
-			self.len = self.len + 1
-			return &self.elements[self.len-1]
+			var i = self.len
+			self.len = i + 1
+			return &self.elements[i]
 		end)
 		arr.methods.push:adddefinition(terra(self: &arr, val: T)
-			var e = self:push()
-			@e = val
-			return e
+			var i = self.len
+			self.len = i + 1
+			self.elements[i] = val
+			return i
 		end)
 		arr.methods.add = arr.methods.push
 
@@ -267,77 +283,87 @@ local function arr_type(T, size_t, context_t, cmp, own_elements)
 
 		--shifting segments to the left or to the right
 
-		--note: not overloading insert() here because of ambiguity with
-		--insert(i,T) when T=size_t.
-		terra arr:insertn(i: size_t, n: size_t)
+		--NOTE: not overloading insert() because of ambiguity with insert(i,T).
+		arr.methods.insertn = overload'insertn'
+		arr.methods.insertn:adddefinition(terra(self: &arr, i: size_t, n: size_t)
+			var len = self.len
+			assert(i >= 0 and i <= len) --no gaps allowed
+			assert(n >= 0)
+			self.len = len + n
+			var move_n = len - i
+			if move_n > 0 then --move trailing elements if any
+				copy(self.elements + i + n, self.elements + i, move_n)
+			end
+		end)
+		arr.methods.insertn:adddefinition(terra(self: &arr, i: size_t, n: size_t, empty_val: T)
 			assert(i >= 0)
 			assert(n >= 0)
-			var b = max(0, self.len-i) --how many elements must be moved
-			self.min_len = i+n+b
-			if b > 0 then
-				copy(self.elements+i+n, self.elements+i, b)
+			var len = self.len
+			self.len = len + n
+			for i = len, i do --fill the gap, if any
+				self.elements[i] = empty_val
 			end
-			return i
-		end
+			var move_n = len - i
+			if move_n > 0 then --move trailing elements if any
+				copy(self.elements + i + n, self.elements + i, move_n)
+			end
+		end)
 
 		arr.methods.insert = overload'insert'
 		arr.methods.insert:adddefinition(terra(self: &arr, i: size_t)
-			return self.elements + self:insertn(i, 1)
+			self:insertn(i, 1)
+			return self.elements + i
 		end)
 		arr.methods.insert:adddefinition(terra(self: &arr, i: size_t, val: T)
-			i = self:insertn(i, 1)
+			self:insertn(i, 1)
 			self.elements[i] = val
 		end)
 		arr.methods.insert:adddefinition(terra(self: &arr, i: size_t, p: &T, n: size_t)
-			i = self:insertn(i, n)
-			copy(self.elements+i, p, n)
-			return i
+			self:insertn(i, n)
+			copy(self.elements + i, p, n)
 		end)
 		arr.methods.insert:adddefinition(terra(self: &arr, i: size_t, v: &view)
-			i = self:insertn(i, v.len)
-			v:copy(self.elements+i)
-			return i
+			self:insertn(i, v.len)
+			v:copy(self.elements + i)
 		end)
 		arr.methods.insert:adddefinition(terra(self: &arr, i: size_t, a: &arr)
-			i = self:insertn(i, a.len)
-			a.view:copy(self.elements+i)
-			return i
+			self:insertn(i, a.len)
+			a.view:copy(self.elements + i)
 		end)
 
 		arr.methods.add:adddefinition(terra(self: &arr, p: &T, n: size_t)
-			return self:insert(self.len, p, n)
+			var i = self.len; self:insert(i, p, n); return i
 		end)
 		arr.methods.add:adddefinition(terra(self: &arr, v: &view)
-			return self:insert(self.len, v)
+			var i = self.len; self:insert(i, v); return i
 		end)
 		arr.methods.add:adddefinition(terra(self: &arr, a: &arr)
-			return self:insert(self.len, a)
+			var i = self.len; self:insert(i, a); return i
 		end)
 
 		arr.methods.remove = overload'remove'
 		arr.methods.remove:adddefinition(terra(self: &arr, i: size_t, n: size_t)
 			assert(i >= 0)
 			assert(n >= 0)
-			if own_elements and cancall(T, 'free') then
+			if own_elements then
 				for i = i, min(self.len, i+n) do
 					self:free_element(i)
 				end
 			end
-			var b = self.len-i-n --how many elements must be moved
-			if b > 0 then
-				copy(self.elements+i, self.elements+i+n, b)
+			var move_n = self.len - i - n --how many elements must be moved
+			if move_n > 0 then
+				copy(self.elements + i, self.elements + i + n, move_n)
 			end
 			self.view.len = self.len - min(n, self.len-i)
-			return i
 		end)
 		arr.methods.remove:adddefinition(terra(self: &arr, i: size_t)
-			return self:remove(i, 1)
+			self:remove(i, 1)
 		end)
 		arr.methods.remove:adddefinition(terra(self: &arr)
-			return self:remove(self.len-1, 1)
+			var i = self.len-1; self:remove(i, 1); return i
 		end)
 		arr.methods.remove:adddefinition(terra(self: &arr, e: &T)
-			return self:remove(self.view:index(e))
+			var i = self.view:index(e); self:remove(i); return i
 		end)
 
 		arr.methods.copy = overload'copy'
@@ -353,13 +379,20 @@ local function arr_type(T, size_t, context_t, cmp, own_elements)
 			return a
 		end)
 
-		terra arr:move(i0: size_t, i: size_t)
+		terra arr:move(i0: size_t, i1: size_t)
 			i0 = self.view:index(i0)
-			assert(i >= 0)
-			if i ~= i0 then
-				var tmp = self.view(i0)
-				self:remove(i0)
-				self:insert(i, tmp)
+			i1 = self.view:index(i1)
+			if i1 ~= i0 then
+				var move_n = abs(i1 - i0)
+				if i1 > i0 then --move in-between elements to the left
+					var e0 = self.elements[i0]
+					copy(self.elements + i0, self.elements + i0 + 1, move_n)
+					self.elements[i1] = e0
+				else --move in-between elements to the right
+					var e1 = self.elements[i1]
+					copy(self.elements + i0 + 1, self.elements + i0, move_n)
+					self.elements[i0] = e1
+				end
 			end
 		end
 
