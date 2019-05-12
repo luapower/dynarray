@@ -68,7 +68,7 @@ if not ... then require'dynarray_test'; return end
 
 setfenv(1, require'low')
 
-local function arr_type(T, size_t, context_t, cmp, own_elements)
+local arr_type = memoize(function(T, size_t, context_t, cmp, own_elements)
 
 	local view = arrview(T, size_t, cmp)
 
@@ -438,8 +438,7 @@ local function arr_type(T, size_t, context_t, cmp, own_elements)
 	end)
 
 	return arr
-end
-arr_type = memoize(arr_type)
+end)
 
 local arr_type = function(T, size_t)
 	local context_t, cmp, own_elements
@@ -455,7 +454,7 @@ local arr_type = function(T, size_t)
 	return arr_type(T, size_t, context_t, cmp, own_elements)
 end
 
-low.arr = macro(
+arr = macro(
 	--calling it from Terra returns a new array.
 	function(arg1, ...)
 		local T, lval, len, size_t
@@ -480,3 +479,5 @@ low.arr = macro(
 	--just the type, and you can also pass a custom C namespace.
 	arr_type
 )
+
+return _M
