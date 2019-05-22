@@ -37,7 +37,8 @@
 	a:set(i,t) -> &t                            replace value
 	a:set(i) -> &t                              free value and get its address
 	a:set(i,t,empty_t) -> &t                    grow array and set value or replace value
-	a:getat(i,empty_t) -> &t                    grow array or free value and get address
+	a:getat(i) -> &t, new_elems                 grow array or get address
+	a:getat(i,empty_t) -> &t                    grow array or get address
 
 	a:push|add() -> &t                          a:insert(self.len)
 	a:push|add(t) -> i                          a:insert(self.len, t)
@@ -246,16 +247,13 @@ local arr_type = memoize(function(T, size_t, context_t, cmp, own_elements)
 
 		--TODO: find a better name for this pattern
 		arr.methods.getat = overload'getat'
+		arr.methods.getat:adddefinition(terra(self: &arr, i: size_t)
+			var new_elems = self:setlen(max(self.len, i+1))
+			return &self.elements[i], new_elems
+		end)
 		arr.methods.getat:adddefinition(terra(self: &arr, i: size_t, empty_val: T)
-			if i >= self.len then --fill the gap, plus the last element
-				var j = self.len
-				self.len = i+1
-				for j = j, i+1 do
-					self.elements[j] = empty_val
-				end
-			else
-				assert(i >= 0)
-			end
+			var elem, new_elems = self:getat(i)
+			for _,e in new_elems do @e = empty_val end
 			return &self.elements[i]
 		end)
 
